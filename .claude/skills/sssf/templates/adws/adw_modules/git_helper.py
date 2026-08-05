@@ -6,8 +6,8 @@ import subprocess
 from pathlib import Path
 
 
-def _git(*args: str) -> str:
-    result = subprocess.run(["git", *args], capture_output=True, text=True)
+def _git(*args: str, cwd: str | Path | None = None) -> str:
+    result = subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd)
     if result.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
     return result.stdout.strip()
@@ -51,6 +51,59 @@ def commit_all(message: str) -> str:
         raise RuntimeError("nothing to commit — the preceding phases changed no files")
     _git("commit", "-m", message)
     return _git("rev-parse", "--short", "HEAD")
+
+
+# ── nested repos (meta-repo layouts) ─────────────────────────────────────────
+#
+# A meta repo that coordinates service repos hides them from itself: each child
+# has its own .git and the parent .gitignores it. `git add -A` at the top level
+# therefore CANNOT see an agent's changes inside a child — a run died with
+# "nothing to commit" after a unanimous council approval because the whole diff
+# lived in a nested frontend repo. Where a change landed is a knowable fact,
+# so code detects it and commits in the right place. No agent judgement.
+
+def nested_repos(root: str | Path = ".", max_depth: int = 2) -> list[Path]:
+    """Child git repos under `root` (their own .git), excluding `root` itself."""
+    root = Path(root).resolve()
+    found: list[Path] = []
+    def walk(directory: Path, depth: int) -> None:
+        for child in sorted(directory.iterdir()):
+            if not child.is_dir() or child.name in (".git", "node_modules", "__pycache__"):
+                continue
+            if (child / ".git").exists():
+                found.append(child)      # a repo owns everything under it — stop here
+            elif depth < max_depth:
+                walk(child, depth + 1)
+    try:
+        walk(root, 1)
+    except OSError:
+        pass
+    return found
+
+
+def commit_everywhere(message: str, root: str | Path = ".") -> list[tuple[str, str]]:
+    """Commit the change wherever it actually lives: the root repo and/or any
+    nested repo with a dirty tree. Returns [(repo_label, short_sha), ...].
+
+    Raises only when NOTHING changed anywhere — the same contract commit_all
+    has for a single repo, widened to the layout the repo actually has.
+    """
+    root = Path(root).resolve()
+    results: list[tuple[str, str]] = []
+    candidates: list[tuple[str, Path]] = [(".", root)]
+    candidates += [(str(child.relative_to(root)), child) for child in nested_repos(root)]
+    for label, repo in candidates:
+        if not (repo / ".git").exists():
+            continue
+        _git("add", "-A", cwd=repo)
+        if not _git("status", "--porcelain", cwd=repo):
+            continue
+        _git("commit", "-m", message, cwd=repo)
+        results.append((label, _git("rev-parse", "--short", "HEAD", cwd=repo)))
+    if not results:
+        raise RuntimeError("nothing to commit in the root repo or any nested repo — "
+                           "the preceding phases changed no files")
+    return results
 
 
 def changed_files() -> list[str]:

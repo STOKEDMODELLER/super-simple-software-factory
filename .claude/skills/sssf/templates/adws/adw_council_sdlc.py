@@ -42,14 +42,14 @@ import sys
 from adw_modules import agents, changes, gates, git_helper, quality, session, utils
 from adw_modules.data_types import (AgentCall, BuildOutput, ChangeCapture,
                                     CouncilSplitOutput, CouncilVoteOutput,
-                                    DocumentOutput, GateReport, PhaseParams,
-                                    PlanOutput, ReviewFinding, ReviewOutput,
-                                    ScoutOutput)
+                                    DiagnosisOutput, DocumentOutput, GateReport,
+                                    PhaseParams, PlanOutput, ReviewFinding,
+                                    ReviewOutput, ScoutOutput)
 
 SEATS = ["seat-fable", "seat-opus", "seat-sonnet", "seat-terra", "seat-luna", "seat-sol"]
 CHAIR_PROPOSE = "chair-openai"
 CHAIR_CONFIRM = "chair-anthropic"
-REQUIRED_AGENTS = (["scout", "planner", "builder", "documenter",
+REQUIRED_AGENTS = (["scout", "planner", "builder", "documenter", "medic",
                     CHAIR_PROPOSE, CHAIR_CONFIRM] + SEATS)
 
 REQUIRED_APPROVALS = 5      # of the six seats — a supermajority green-lights
@@ -132,14 +132,57 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     council_dir.mkdir(parents=True, exist_ok=True)
 
     def commit(ph, envelope) -> None:
-        """Commit what the preceding phase produced, in that agent's own words."""
+        """Commit what the preceding phase produced, wherever it actually lives.
+
+        commit_everywhere covers meta-repo layouts: an agent's diff may sit in a
+        nested service repo the root repo .gitignores, where a root-level
+        `git add -A` is blind — that exact blindness failed a unanimously
+        approved run at its very last step.
+        """
         message = envelope.commit_message or f"sssf({run.adw_id}): {envelope.summary}"
-        ph.log(sha=git_helper.commit_all(message), message=message)
+        commits = git_helper.commit_everywhere(message, root=run.repo_root)
+        ph.log(commits=", ".join(f"{label}@{sha}" for label, sha in commits),
+               message=message)
 
     def record(ph, result) -> None:
         passed = sum(1 for check in result.checks if check.passed)
         ph.log(passed=result.passed, checks=f"{passed}/{len(result.checks)}",
                artifacts=", ".join(result.artifacts))
+
+    medic_calls = 0
+
+    def diagnose(failed: str, error: Exception, previous=None) -> DiagnosisOutput:
+        """Send the medic in. One level of recovery only — if the medic itself
+        fails, the exception propagates and the caller decides."""
+        nonlocal medic_calls
+        medic_calls += 1
+        diagnosis_path = council_dir / f"diagnosis_{medic_calls}.md"
+        with run.phase(PhaseParams(name=f"medic_{medic_calls}", kind="agent", owner="medic",
+                                   retries=1,
+                                   description="Diagnose the failure from the evidence so the "
+                                               "run recovers instead of dying")) as ph:
+            return ph.call(AgentCall(
+                output_type=DiagnosisOutput,
+                prompt=(f"Failed segment: {failed}\n"
+                        f"Error (verbatim):\n{error}\n\n"
+                        f"Session dir: {run.session_dir}\n"
+                        f"Repo root: {run.repo_root}\n\n"
+                        f"The run's request:\n{prompt}\n\n"
+                        f"Write your diagnosis to {diagnosis_path} and list it in "
+                        f"artifacts."),
+                previous=previous,
+                gates=[gates.artifacts_exist]))
+
+    def diagnosis_feedback(diagnosis: DiagnosisOutput, round_no: int) -> ReviewOutput:
+        """A medic diagnosis, shaped as the same envelope council rejections use,
+        so a crashed round re-enters the loop through the identical door."""
+        blocking = [f"[medic] {diagnosis.cause or diagnosis.summary}"]
+        if diagnosis.fix_instructions:
+            blocking.append(f"[medic] fix: {diagnosis.fix_instructions}")
+        return ReviewOutput(
+            status="success", approved=False, blocking=blocking,
+            summary=f"round {round_no} failed mid-flight; the medic diagnosed it",
+            notes_for_next_agent=diagnosis.fix_instructions or diagnosis.cause)
 
     with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
                                description="Capture the incoming ask")) as ph:
@@ -147,12 +190,12 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                council=f"{len(SEATS)} seats, green-light at {REQUIRED_APPROVALS}, "
                        f"max {MAX_COUNCIL_ROUNDS} round(s)")
 
-    feedback: ReviewOutput | None = None
     build: BuildOutput | None = None
-    green = False
-    tally = "no round completed"
 
-    for round_no in range(1, MAX_COUNCIL_ROUNDS + 1):
+    def do_round(round_no: int, feedback: ReviewOutput | None) -> tuple[bool, str, ReviewOutput | None]:
+        """One full round: scout → plan → build → test → council vote → tally.
+        Returns (green_lit, tally, feedback_for_next_round)."""
+        nonlocal build
         tag = f"_r{round_no}"
 
         if feedback is None:
@@ -216,9 +259,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                                           gates=[gates.diff_matches_claims]))
 
         if test is not None and not test.passed:
-            tally = "suite red — council not convened"
-            feedback = test_feedback(test)
-            continue
+            return False, "suite red — council not convened", test_feedback(test)
 
         # ── the council convenes ────────────────────────────────────────────
         seat_lines = "\n".join(f"- {seat}" for seat in SEATS)
@@ -280,44 +321,97 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                       for seat, vote in votes})
 
         if approvals >= REQUIRED_APPROVALS:
-            green = True
+            return True, tally, None
+        return False, tally, council_feedback(votes, tally)
+
+    # ── the recovery loop: a crashed round is diagnosed, never fatal ─────────
+    # The medic's diagnosis re-enters through the same door a council rejection
+    # uses, so recovery and revision are one mechanism. "abort" is the medic
+    # saying a retry would fail identically — the run ends with the diagnosis
+    # on record instead of a stack trace.
+    green = False
+    tally = "no round completed"
+    feedback: ReviewOutput | None = None
+    for round_no in range(1, MAX_COUNCIL_ROUNDS + 1):
+        try:
+            green, tally, feedback = do_round(round_no, feedback)
+        except Exception as error:
+            try:
+                diagnosis = diagnose(f"round {round_no}", error, previous=build)
+            except Exception:
+                tally = f"round {round_no} failed undiagnosed: {error}"
+                break
+            tally = f"round {round_no} failed, diagnosed: {diagnosis.summary or diagnosis.cause}"
+            if diagnosis.recommendation == "abort":
+                break
+            feedback = diagnosis_feedback(diagnosis, round_no)
+            continue
+        if green:
             break
-        feedback = council_feedback(votes, tally)
 
     # Only a green-lit build lands. A rejected run leaves the plans committed,
     # the working tree dirty, and the council's reasons in context_handoff/.
+    doc_note = ""
     if green and build is not None:
-        with run.phase(PhaseParams(name="commit_build", kind="code", owner="git",
-                                   description="Land the code only now: green suite, "
-                                               "council green-light")) as ph:
-            commit(ph, build)
+        try:
+            with run.phase(PhaseParams(name="commit_build", kind="code", owner="git",
+                                       description="Land the code only now: green suite, "
+                                                   "council green-light")) as ph:
+                commit(ph, build)
+        except Exception as error:
+            # A green-lit build that cannot land is the one failure that must
+            # never pass silently — but it deserves a diagnosis, not a crash.
+            try:
+                diagnosis = diagnose("commit_build", error, previous=build)
+                if diagnosis.recommendation == "retry":
+                    with run.phase(PhaseParams(name="commit_build_retry", kind="code", owner="git",
+                                               description="Retry the landing on the medic's "
+                                                           "word that the cause is cleared")) as ph:
+                        commit(ph, build)
+                else:
+                    return run.finish(accepted=False,
+                                      reason=f"green-lit but the commit failed: "
+                                             f"{diagnosis.cause or error}")
+            except Exception as retry_error:
+                return run.finish(accepted=False,
+                                  reason=f"green-lit but the commit failed: {retry_error}")
 
-        with run.phase(PhaseParams(name="changes", kind="code", owner="git",
-                                   description="Diff the whole run against its pinned "
-                                               "baseline, for the documenter")) as ph:
-            changeset = changes.capture(run, ChangeCapture(base=baseline))
-            ph.log(base=f"{changeset.base.label} @ {changeset.base.commit[:7]}",
-                   files=len(changeset.files) + len(changeset.untracked),
-                   lines=f"+{changeset.insertions} -{changeset.deletions}",
-                   diff=changeset.diff_path)
-            if changeset.empty:
-                raise RuntimeError("nothing changed since the baseline — "
-                                   "there is nothing to document.")
+        # Documentation is garnish on an approved, landed build: its failure is
+        # diagnosed and noted, never allowed to flip a green run red.
+        try:
+            with run.phase(PhaseParams(name="changes", kind="code", owner="git",
+                                       description="Diff the whole run against its pinned "
+                                                   "baseline, for the documenter")) as ph:
+                changeset = changes.capture(run, ChangeCapture(base=baseline))
+                ph.log(base=f"{changeset.base.label} @ {changeset.base.commit[:7]}",
+                       files=len(changeset.files) + len(changeset.untracked),
+                       lines=f"+{changeset.insertions} -{changeset.deletions}",
+                       diff=changeset.diff_path)
+                if changeset.empty:
+                    raise RuntimeError("nothing changed since the baseline at the root repo — "
+                                       "the diff may live in a nested repo this capture "
+                                       "cannot see.")
 
-        with run.phase(PhaseParams(name="document", kind="agent", owner="documenter",
-                                   retries=1,
-                                   description="Write up the council-approved change")) as ph:
-            document = ph.call(AgentCall(output_type=DocumentOutput, prompt=prompt,
-                                         previous=changes.as_envelope(changeset, DOCUMENT_NOTES),
-                                         gates=[gates.artifacts_exist, gates.files_non_empty]))
+            with run.phase(PhaseParams(name="document", kind="agent", owner="documenter",
+                                       retries=1,
+                                       description="Write up the council-approved change")) as ph:
+                document = ph.call(AgentCall(output_type=DocumentOutput, prompt=prompt,
+                                             previous=changes.as_envelope(changeset, DOCUMENT_NOTES),
+                                             gates=[gates.artifacts_exist, gates.files_non_empty]))
 
-        with run.phase(PhaseParams(name="commit_docs", kind="code", owner="git",
-                                   description="Ship the write-up in its own commit, beside "
-                                               "the code it describes")) as ph:
-            commit(ph, document)
+            with run.phase(PhaseParams(name="commit_docs", kind="code", owner="git",
+                                       description="Ship the write-up in its own commit, beside "
+                                                   "the code it describes")) as ph:
+                commit(ph, document)
+        except Exception as error:
+            try:
+                diagnosis = diagnose("documentation", error, previous=build)
+                doc_note = f"; docs skipped — {diagnosis.summary or diagnosis.cause or error}"
+            except Exception:
+                doc_note = f"; docs skipped — {error}"
 
     return run.finish(accepted=green,
-                      reason=f"the council never green-lit the build ({tally})")
+                      reason=f"the council never green-lit the build ({tally}){doc_note}")
 
 
 if __name__ == "__main__":

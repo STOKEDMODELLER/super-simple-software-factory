@@ -220,6 +220,17 @@ agents:
     writes: []
     tools: [read, grep, find, ls, bash, write]
 
+  - name: medic
+    model: claude-bridge/claude-sonnet-5
+    thinking: high
+    color: "#10b981"
+    purpose: Diagnose a failed phase from the evidence and recommend one bounded recovery.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/medic/system.md
+      user: adws/adw_data/prompt_engineering/medic/user.md
+    writes: []                     # diagnoses only — repair belongs to later agents
+    tools: [read, grep, find, ls, bash, write]
+
   - name: documenter
     model: openai-codex/gpt-5.6-sol    # Codex via pi's OAuth login, works out of the box
     color: "#e879f9"

@@ -147,6 +147,21 @@ class CouncilSplitOutput(EnvelopeBase):
     assignments: list[CouncilAssignment] = Field(default_factory=list)
 
 
+class DiagnosisOutput(EnvelopeBase):
+    """The medic's read of a failed phase: what broke, and what to do about it.
+
+    `recommendation` is advisory — code stays in charge of the loop. "retry"
+    means the cause is transient or already addressed and re-running the failed
+    segment should work; "revise" means the next council round must change the
+    plan/build (fix_instructions say how); "abort" means retrying would repeat
+    the failure and the run should end with this diagnosis on record.
+    """
+
+    cause: str = ""                 # the root cause, in one or two sentences
+    recommendation: Literal["retry", "revise", "abort"] = "abort"
+    fix_instructions: str = ""      # concrete steps for the next round or the engineer
+
+
 class CouncilVoteOutput(EnvelopeBase):
     """One seat's verdict on its assigned slice of the review.
 
