@@ -57,6 +57,22 @@ const phaseOutputs = computed(() =>
     .sort((a, b) => (a.attempt ?? 0) - (b.attempt ?? 0)),
 )
 
+/**
+ * The vote inside an envelope, when it carries one — `approve` on a council
+ * seat's CouncilVoteOutput, `approved` on a ReviewOutput. Null means this
+ * envelope is not a vote and no badge renders.
+ */
+function voteOf(env: Envelope): boolean | null {
+  try {
+    const p = JSON.parse(env.payload_json ?? '{}') as Record<string, unknown>
+    if (typeof p.approve === 'boolean') return p.approve
+    if (typeof p.approved === 'boolean') return p.approved
+  } catch {
+    // Not JSON — not a vote. The raw payload still renders below.
+  }
+  return null
+}
+
 // The agent's configuration, carried on its phase's `agent_start` event.
 // Older rows carry only model/thinking — rows render what was recorded.
 const agentConfig = computed(() => {
@@ -606,6 +622,14 @@ function togglePanel(id: string) {
               <span class="output-valid" :class="env.valid ? 'pass' : 'fail'">
                 {{ env.valid ? 'valid' : 'invalid' }}
               </span>
+              <span
+                v-if="voteOf(env) !== null"
+                class="output-vote"
+                :class="voteOf(env) ? 'pass' : 'fail'"
+                title="This envelope carries a vote (council seat or reviewer verdict)"
+              >
+                {{ voteOf(env) ? '✓ approve' : '✗ reject' }}
+              </span>
             </div>
             <!-- Safe: highlightJson escapes ALL input before emitting its own spans. -->
             <pre v-html="highlightJson(env.payload_json)" />
@@ -1140,6 +1164,21 @@ h3:first-child {
 }
 
 .output-valid.fail {
+  color: var(--red);
+}
+
+.output-vote {
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+
+.output-vote.pass {
+  color: var(--green);
+}
+
+.output-vote.fail {
   color: var(--red);
 }
 
