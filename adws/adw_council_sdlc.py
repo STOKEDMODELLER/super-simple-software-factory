@@ -174,14 +174,14 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                            f"close every one of them; the seat reviews in "
                            f"{council_dir} carry the full arguments.")
 
-        with run.phase(PhaseParams(name=f"scout{tag}", kind="agent", owner="scout",
+        with run.phase(PhaseParams(name=f"scout{tag}", kind="agent", owner="scout", retries=1,
                                    description="Recon the code the request — and any council "
                                                "feedback — actually touches")) as ph:
             scouted = ph.call(AgentCall(output_type=ScoutOutput, prompt=scout_prompt,
                                         previous=feedback,
                                         gates=[gates.artifacts_exist]))
 
-        with run.phase(PhaseParams(name=f"plan{tag}", kind="agent", owner="planner",
+        with run.phase(PhaseParams(name=f"plan{tag}", kind="agent", owner="planner", retries=1,
                                    description="Turn the request — and any council feedback — "
                                                "into an implementable plan")) as ph:
             plan = ph.call(AgentCall(output_type=PlanOutput, prompt=plan_prompt,
@@ -193,7 +193,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                                                "to blur it")) as ph:
             commit(ph, plan)
 
-        with run.phase(PhaseParams(name=f"build{tag}", kind="agent", owner="builder",
+        with run.phase(PhaseParams(name=f"build{tag}", kind="agent", owner="builder", retries=1,
                                    description="Implement the plan exactly")) as ph:
             build = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt, previous=plan,
                                       gates=[gates.diff_matches_claims]))
@@ -222,7 +222,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
 
         # ── the council convenes ────────────────────────────────────────────
         seat_lines = "\n".join(f"- {seat}" for seat in SEATS)
-        with run.phase(PhaseParams(name=f"split{tag}", kind="agent", owner=CHAIR_PROPOSE,
+        with run.phase(PhaseParams(name=f"split{tag}", kind="agent", owner=CHAIR_PROPOSE, retries=1,
                                    description="First chair divides the review into one "
                                                "concrete brief per seat")) as ph:
             split = ph.call(AgentCall(
@@ -236,7 +236,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                 previous=build,
                 gates=[assignments_cover_council]))
 
-        with run.phase(PhaseParams(name=f"confirm{tag}", kind="agent", owner=CHAIR_CONFIRM,
+        with run.phase(PhaseParams(name=f"confirm{tag}", kind="agent", owner=CHAIR_CONFIRM, retries=1,
                                    description="Second chair audits the split against the real "
                                                "change and emits the final briefs")) as ph:
             final_split = ph.call(AgentCall(
