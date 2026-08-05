@@ -74,6 +74,22 @@ export class SssfDb {
     }
     this.path = path;
     this.sessionsDir = resolve(dirname(path), "sessions");
+
+    // The tracer's writer connection checkpoints and deletes the -wal/-shm
+    // sidecar files when it closes after each ADW run (last-connection-out
+    // behavior of WAL mode). A readonly open can't recreate them itself —
+    // SQLite refuses under SQLITE_OPEN_READONLY — so between runs this
+    // constructor would otherwise fail with "unable to open database file"
+    // every single time. Touch a real write transaction first, on a
+    // throwaway read-write handle, so the sidecar files exist before the
+    // readonly connection below ever opens.
+    if (!existsSync(`${path}-wal`)) {
+      const touch = new Database(path);
+      touch.exec("PRAGMA journal_mode = WAL");
+      touch.exec("PRAGMA user_version = 0");
+      touch.close();
+    }
+
     this.db = new Database(path, { readonly: true });
 
     // WAL is set by the tracer when it creates the db; a readonly connection
