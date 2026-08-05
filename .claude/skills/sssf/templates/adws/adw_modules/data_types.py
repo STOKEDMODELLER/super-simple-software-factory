@@ -128,6 +128,38 @@ class DocumentOutput(EnvelopeBase):
     commit_message: str = ""
 
 
+class CouncilAssignment(BaseModel):
+    """One seat's review brief for this round of the council."""
+
+    seat: str                       # agent name of the seat holding this brief
+    focus: str                      # the dimension: plan-conformance, security, tests…
+    instructions: str = ""          # what specifically to examine, and where to look
+
+
+class CouncilSplitOutput(EnvelopeBase):
+    """The chairs' division of the review across the council's seats.
+
+    Two chairs produce this in sequence — one proposes the split, the other
+    audits and emits the final version. Code then fans the briefs out to the
+    seats; the chairs never review the code themselves.
+    """
+
+    assignments: list[CouncilAssignment] = Field(default_factory=list)
+
+
+class CouncilVoteOutput(EnvelopeBase):
+    """One seat's verdict on its assigned slice of the review.
+
+    `approve` is the vote. A rejection must carry at least one blocking item —
+    the council's feedback loop is built from these, so a reasonless rejection
+    is a gate failure, not an opinion.
+    """
+
+    approve: bool = False
+    findings: list[ReviewFinding] = Field(default_factory=list)
+    blocking: list[str] = Field(default_factory=list)
+
+
 # ── Deterministic quality blocks ─────────────────────────────────────────────
 
 QualityArea = Literal["frontend", "backend"]

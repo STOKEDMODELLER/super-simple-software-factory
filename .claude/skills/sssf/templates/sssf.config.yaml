@@ -2,7 +2,12 @@
 # v1 runs the Pi coding agent only; coding_agent: claude_code arrives in v2.
 defaults:
   coding_agent: pi
-  model: google/gemini-3.6-flash   # provider/id — a bare pattern is ambiguous across providers
+  # Headless CLI only, no raw API keys: both providers below authenticate via
+  # pi's own OAuth logins in ~/.pi/agent/auth.json (Claude subscription +
+  # Codex subscription). openai-codex works out of the box; anthropic/* needs
+  # "extra usage" enabled at claude.ai/settings/usage first (third-party apps
+  # draw from that pool, not your plan limits) or calls will 400.
+  model: openai-codex/gpt-5.6-luna # provider/id — a bare pattern is ambiguous across providers
   thinking: medium                 # off | minimal | low | medium | high | xhigh | max
   harness_engineering: []          # pi extensions loaded into the harness (-e)
   # Roster-wide allowlist; any agent may override with its own list.
@@ -38,7 +43,9 @@ observability:
 
 agents:
   - name: planner
-    model: fireworks/accounts/fireworks/models/kimi-k3
+    # anthropic/* is blocked (needs extra usage). claude-bridge routes through the
+    # Claude Code CLI via the Agent SDK, which draws on subscription quota instead.
+    model: claude-bridge/claude-sonnet-5
     thinking: high
     color: "#a78bfa"                 # optional hex — the agent's lane color in the visualizer
     purpose: Turn a request into a plan the builder can implement without asking questions.
@@ -104,7 +111,7 @@ agents:
   # phase over adw_modules/quality.py. See SKILL.md hard rule 8.
 
   - name: reviewer
-    model: openai/gpt-5.6-terra
+    model: claude-bridge/claude-opus-5   # 1M context; catalog unlocked by pi >= 0.83
     thinking: high
     color: "#fb7185"
     purpose: Confirm that what was built is what was asked for; change nothing.
@@ -121,8 +128,100 @@ agents:
       - bash
       - write
 
+  # ── The review council (adw_council_sdlc) ────────────────────────────────
+  # Two chairs run the council — one per org — and six seats vote. Chairs split
+  # the review into per-seat briefs; every seat reviews ONE dimension and votes.
+  # All eight are read-only: writes: [] means the repo is untouchable, while
+  # their reviews still land in context_handoff/ (runtime, always writable).
+  # Both chairs share one prompt pair, both being the same role; ditto seats.
+
+  - name: chair-openai
+    model: openai-codex/gpt-5.6-terra
+    thinking: high
+    color: "#f97316"
+    purpose: Propose the council's review split — one concrete brief per seat.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/council_chair/system.md
+      user: adws/adw_data/prompt_engineering/council_chair/user.md
+    writes: []
+    tools: [read, grep, find, ls, bash, write]
+
+  - name: chair-anthropic
+    model: claude-bridge/claude-opus-5
+    thinking: high
+    color: "#f59e0b"
+    purpose: Audit the proposed split against the real change and emit the final briefs.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/council_chair/system.md
+      user: adws/adw_data/prompt_engineering/council_chair/user.md
+    writes: []
+    tools: [read, grep, find, ls, bash, write]
+
+  - name: seat-fable
+    model: claude-bridge/claude-fable-5
+    thinking: high
+    color: "#6d28d9"
+    purpose: Hold a council seat — review the assigned dimension and vote.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/council_seat/system.md
+      user: adws/adw_data/prompt_engineering/council_seat/user.md
+    writes: []
+    tools: [read, grep, find, ls, bash, write]
+
+  - name: seat-opus
+    model: claude-bridge/claude-opus-5
+    thinking: high
+    color: "#9333ea"
+    purpose: Hold a council seat — review the assigned dimension and vote.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/council_seat/system.md
+      user: adws/adw_data/prompt_engineering/council_seat/user.md
+    writes: []
+    tools: [read, grep, find, ls, bash, write]
+
+  - name: seat-sonnet
+    model: claude-bridge/claude-sonnet-5
+    color: "#c084fc"
+    purpose: Hold a council seat — review the assigned dimension and vote.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/council_seat/system.md
+      user: adws/adw_data/prompt_engineering/council_seat/user.md
+    writes: []
+    tools: [read, grep, find, ls, bash, write]
+
+  - name: seat-terra
+    model: openai-codex/gpt-5.6-terra
+    thinking: high
+    color: "#0ea5e9"
+    purpose: Hold a council seat — review the assigned dimension and vote.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/council_seat/system.md
+      user: adws/adw_data/prompt_engineering/council_seat/user.md
+    writes: []
+    tools: [read, grep, find, ls, bash, write]
+
+  - name: seat-luna
+    model: openai-codex/gpt-5.6-luna
+    color: "#38bdf8"
+    purpose: Hold a council seat — review the assigned dimension and vote.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/council_seat/system.md
+      user: adws/adw_data/prompt_engineering/council_seat/user.md
+    writes: []
+    tools: [read, grep, find, ls, bash, write]
+
+  - name: seat-sol
+    model: openai-codex/gpt-5.6-sol
+    color: "#7dd3fc"
+    purpose: Hold a council seat — review the assigned dimension and vote.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/council_seat/system.md
+      user: adws/adw_data/prompt_engineering/council_seat/user.md
+    writes: []
+    tools: [read, grep, find, ls, bash, write]
+
   - name: documenter
-    model: openai/gpt-5.6-luna
+    model: openai-codex/gpt-5.6-sol    # Codex via pi's OAuth login, works out of the box
     color: "#e879f9"
     purpose: Write up the change that was just made, from the diff; document only.
     prompt_engineering:

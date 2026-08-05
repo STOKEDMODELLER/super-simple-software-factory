@@ -60,6 +60,34 @@ sdlc *ARGS:
 simple-sdlc *ARGS:
     uv run adws/adw_simple_sdlc.py --config {{config}} "$@"
 
+# scout, plan, build, test, then a 6-seat council votes; rejections loop back: just council-sdlc "..."
+council-sdlc *ARGS:
+    uv run adws/adw_council_sdlc.py --config {{config}} "$@"
+
+# the change is well understood, just do it: just build "..."
+build *ARGS:
+    uv run adws/adw_build.py --config {{config}} "$@"
+
+# build, then test with bounded fixes: just build-test "..."
+build-test *ARGS:
+    uv run adws/adw_build_test.py --config {{config}} "$@"
+
+# build, then the reviewer confirms intent: just build-review "..."
+build-review *ARGS:
+    uv run adws/adw_build_review.py --config {{config}} "$@"
+
+# deterministic checks only, no agents judge: just quality
+quality *ARGS:
+    uv run adws/adw_quality.py --config {{config}} "$@"
+
+# write up work already done, from the diff vs main: just document "..."
+document *ARGS:
+    uv run adws/adw_document.py --config {{config}} "$@"
+
+# the default full loop plus quality gates before commit: just full-sdlc "..."
+full-sdlc *ARGS:
+    uv run adws/adw_plan_build_test_quality.py --config {{config}} "$@"
+
 # ── watch it ────────────────────────────────────────────────────────────────
 # Reads never block a running workflow, the db is WAL. Poll as hard as you like.
 
