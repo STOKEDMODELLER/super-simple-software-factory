@@ -1,10 +1,15 @@
 import { ref } from 'vue'
 
 // Hash routes: #/ → sessions · #/<adw_id> → waterfall · #/<adw_id>/<phase_id> → phase panel open
+//              #/settings → roster settings (a reserved id, never an adw_id)
 export interface Route {
   adwId: string | null
   phaseId: string | null
+  settings: boolean
 }
+
+/** Reserved first segment. adw_ids are 8 hex chars, so this can never collide. */
+const SETTINGS = 'settings'
 
 function parse(): Route {
   const parts = window.location.hash
@@ -12,7 +17,8 @@ function parse(): Route {
     .split('/')
     .filter(Boolean)
     .map(decodeURIComponent)
-  return { adwId: parts[0] ?? null, phaseId: parts[1] ?? null }
+  if (parts[0] === SETTINGS) return { adwId: null, phaseId: null, settings: true }
+  return { adwId: parts[0] ?? null, phaseId: parts[1] ?? null, settings: false }
 }
 
 const route = ref<Route>(parse())
@@ -35,6 +41,8 @@ export function hrefFor(adwId?: string | null, phaseId?: string | null): string 
   if (adwId && phaseId) h += `/${encodeURIComponent(phaseId)}`
   return h
 }
+
+export const settingsHref = `#/${SETTINGS}`
 
 export function navigate(adwId?: string | null, phaseId?: string | null): void {
   window.location.hash = hrefFor(adwId, phaseId)

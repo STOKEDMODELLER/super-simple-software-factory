@@ -76,3 +76,70 @@ export function fetchEnvelopes(adwId: string): Promise<Envelope[]> {
 export function fetchGates(adwId: string): Promise<GateResult[]> {
   return getJson(`/api/sessions/${encodeURIComponent(adwId)}/gates`) as Promise<GateResult[]>
 }
+
+// ── roster settings ──────────────────────────────────────────────────────────
+
+export interface AgentEntry {
+  name: string
+  /** null = inherits defaults.model */
+  model: string | null
+  thinking: string | null
+  color: string | null
+  purpose: string
+  writes: string[] | null
+  tools: string[] | null
+}
+
+export interface ProfileDetail {
+  profile: string
+  path: string
+  defaults: { model: string | null; thinking: string | null }
+  agents: AgentEntry[]
+}
+
+export interface ModelOption {
+  provider: string
+  id: string
+  ref: string
+  contextWindow: string
+}
+
+export function fetchModels(): Promise<ModelOption[]> {
+  return getJson('/api/models') as Promise<ModelOption[]>
+}
+
+export function fetchProfiles(): Promise<{ repo_root: string; profiles: string[]; active: string | null }> {
+  return getJson('/api/config') as Promise<{ repo_root: string; profiles: string[]; active: string | null }>
+}
+
+export function fetchProfile(profile: string): Promise<ProfileDetail> {
+  return getJson(`/api/config/${encodeURIComponent(profile)}`) as Promise<ProfileDetail>
+}
+
+/** Server errors carry a message worth showing — a rejected model ref explains itself. */
+async function send(url: string, method: string, body: unknown): Promise<unknown> {
+  const res = await fetch(url, {
+    method,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const data = (await res.json().catch(() => ({}))) as { error?: string }
+  if (!res.ok) throw new Error(data.error ?? `${method} ${url} → ${res.status}`)
+  return data
+}
+
+export function patchAgent(
+  profile: string,
+  agent: string,
+  patch: { model?: string; thinking?: string },
+): Promise<unknown> {
+  return send(
+    `/api/config/${encodeURIComponent(profile)}/agents/${encodeURIComponent(agent)}`,
+    'PATCH',
+    patch,
+  )
+}
+
+export function createProfile(name: string, from: string): Promise<unknown> {
+  return send('/api/config-profiles', 'POST', { name, from })
+}

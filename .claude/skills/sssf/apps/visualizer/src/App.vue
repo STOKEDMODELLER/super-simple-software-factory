@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { useRoute, hrefFor, phaseCrumb } from './lib/router'
+import { Settings2 } from 'lucide-vue-next'
+import { useRoute, hrefFor, phaseCrumb, settingsHref } from './lib/router'
 import SessionsList from './components/SessionsList.vue'
 import SessionTrace from './components/SessionTrace.vue'
+import SettingsView from './components/SettingsView.vue'
 
 const route = useRoute()
 </script>
@@ -19,7 +21,11 @@ const route = useRoute()
         </svg>
         <span class="brand">Super Simple Software Factory</span>
         <span class="sep">›</span>
-        <a :href="hrefFor()" :class="{ current: !route.adwId }">sessions</a>
+        <a :href="hrefFor()" :class="{ current: !route.adwId && !route.settings }">sessions</a>
+        <template v-if="route.settings">
+          <span class="sep">›</span>
+          <span class="current">settings</span>
+        </template>
         <template v-if="route.adwId">
           <span class="sep">›</span>
           <a :href="hrefFor(route.adwId)" :class="{ current: !route.phaseId }">{{
@@ -31,10 +37,21 @@ const route = useRoute()
           <span class="current">{{ phaseCrumb ?? route.phaseId }}</span>
         </template>
       </nav>
-      <span class="live-hint"><span class="live-dot" /> live</span>
+      <div class="top-right">
+        <a
+          :href="settingsHref"
+          class="settings-link"
+          :class="{ on: route.settings }"
+          title="Model settings — which model runs each task category"
+        >
+          <Settings2 :size="17" />
+        </a>
+        <span class="live-hint"><span class="live-dot" /> live</span>
+      </div>
     </header>
     <main>
-      <SessionsList v-if="!route.adwId" />
+      <SettingsView v-if="route.settings" />
+      <SessionsList v-else-if="!route.adwId" />
       <SessionTrace v-else :key="route.adwId" :adw-id="route.adwId" :phase-id="route.phaseId" />
     </main>
   </div>
@@ -109,6 +126,27 @@ const route = useRoute()
 
 .crumbs .current {
   color: var(--text);
+}
+
+.top-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.settings-link {
+  display: inline-flex;
+  align-items: center;
+  color: var(--dim);
+  padding: 5px;
+  border-radius: 7px;
+  line-height: 0;
+}
+
+.settings-link:hover,
+.settings-link.on {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .live-hint {

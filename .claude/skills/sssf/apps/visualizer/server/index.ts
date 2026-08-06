@@ -11,8 +11,11 @@
  *   SSSF_DB=/path/to/sssf.db PORT=4600 bun run server/index.ts
  */
 import { existsSync, statSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { SssfDb, resolveDbPath } from "./db.ts";
+import {
+  availableModels, createProfile, listProfiles, patchAgent, readProfile,
+} from "./config.ts";
 import type { AgentPrompts, ApiError, HealthResponse } from "../shared/types.ts";
 
 const PORT = Number(process.env.PORT ?? 4600);
@@ -26,6 +29,12 @@ try {
   console.error(`[sssf] ${(error as Error).message}`);
   process.exit(1);
 }
+
+/**
+ * The repo the trace db belongs to — <repo>/adws/adw_data/sssf.db, so up three.
+ * The roster lives there too, which is what the settings routes read and write.
+ */
+const REPO_ROOT = resolve(dirname(dbPath), "..", "..");
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -112,6 +121,9 @@ async function serveStatic(req: Request): Promise<Response> {
 
 const server = Bun.serve({
   port: PORT,
+  // The default 10s cuts off /api/models, which shells out to pi. Raised for
+  // that one slow, human-triggered call — every other route answers in ms.
+  idleTimeout: 30,
   routes: {
     "/api/health": safely(
       () =>
@@ -124,6 +136,51 @@ const server = Bun.serve({
     ),
 
     "/api/sessions": safely((req) => json(db.sessions(intQuery(req, "limit", 200)))),
+
+    // ── roster settings ──────────────────────────────────────────────────
+    // The only writes besides archive, and they are deliberately narrow: one
+    // agent's model or thinking level, patched line-by-line so the config's
+    // comments survive. Nothing here can add, remove, or re-scope an agent —
+    // tools and `writes` stay hand-edited, because those are the boundaries
+    // that make a read-only agent read-only.
+
+    "/api/models": safely(async () => json(await availableModels())),
+
+    "/api/config": safely(() => {
+      const profiles = listProfiles(REPO_ROOT);
+      return json({ repo_root: REPO_ROOT, profiles, active: profiles[0] ?? null });
+    }),
+
+    "/api/config/:profile": {
+      GET: safely((req) => json(readProfile(REPO_ROOT, param(req, "profile")))),
+    },
+
+    "/api/config/:profile/agents/:agent": {
+      PATCH: safely(async (req) => {
+        const body = (await req.json().catch(() => ({}))) as {
+          model?: unknown; thinking?: unknown;
+        };
+        const patch: { model?: string; thinking?: string } = {};
+        if (typeof body.model === "string") patch.model = body.model;
+        if (typeof body.thinking === "string") patch.thinking = body.thinking;
+        if (!Object.keys(patch).length) {
+          return json({ error: "nothing to patch — send model and/or thinking" }, 400);
+        }
+        const profile = param(req, "profile");
+        const written = patchAgent(REPO_ROOT, profile, param(req, "agent"), patch);
+        return json({ patched: written, agent: param(req, "agent"), profile });
+      }),
+    },
+
+    "/api/config-profiles": {
+      POST: safely(async (req) => {
+        const body = (await req.json().catch(() => ({}))) as { name?: unknown; from?: unknown };
+        if (typeof body.name !== "string" || typeof body.from !== "string") {
+          return json({ error: "name and from are required" } satisfies ApiError, 400);
+        }
+        return json({ path: createProfile(REPO_ROOT, body.name, body.from) });
+      }),
+    },
 
     "/api/sessions/:adw_id": safely((req) => {
       const detail = db.sessionDetail(param(req, "adw_id"));
