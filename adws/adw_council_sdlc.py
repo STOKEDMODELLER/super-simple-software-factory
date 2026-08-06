@@ -25,19 +25,31 @@ reviews exactly one dimension and votes, and a rejection without a named
 blocking item is a gate failure, not an opinion.
 
 Code disposes of the votes. The tally is arithmetic, not judgement: green-light
-at REQUIRED_APPROVALS of the six. A red suite that survives the fix loop counts
-as an automatic rejection — seats never convene over code that does not run.
+at REQUIRED_APPROVALS of the six; on the FINAL round a simple majority
+(SOFT_ACCEPT_APPROVALS) soft-accepts — the build lands and the residual
+blockers become a follow-up spec instead of a discarded working tree. A red
+suite that survives the fix loop counts as an automatic rejection — seats never
+convene over code that does not run.
 
-Rejection is a loop, not a verdict. Code collects every seat's blocking items
-into one feedback envelope, writes it to context_handoff/council/, and the next
-round re-enters at the SCOUT — recon focused on the gaps — then the planner
+Three mechanisms keep the loop convergent instead of a ratchet:
+  1. Severity. Only `blocker` items veto; `major`/`nit` are advisories that
+     ride into the record. A seat may approve WITH advisories.
+  2. Spec freeze. Round 1's blockers are the complete acceptance bar for every
+     later round — revision-round seats may reject only over carried-over
+     blockers still unfixed or regressions the remediation itself introduced.
+  3. Benching. A chair marks a seat `applicable: false` when its dimension does
+     not exist in the change; the seat auto-approves instead of inventing a lens.
+
+Rejection is a loop, not a verdict. Code collects every seat's severity-blocker
+items into one feedback envelope, writes it to context_handoff/council/, and the
+next round re-enters at the SCOUT — recon focused on the gaps — then the planner
 revises against the feedback, the builder rebuilds, and the council re-votes.
-The chain accepts only a green-lit build; run.finish carries the last tally
-either way.
+run.finish carries the last tally either way.
 """
 
 import argparse
 import sys
+from pathlib import Path
 
 from adw_modules import agents, changes, gates, git_helper, quality, session, utils
 from adw_modules.data_types import (AgentCall, BuildOutput, ChangeCapture,
@@ -52,13 +64,30 @@ CHAIR_CONFIRM = "chair-anthropic"
 REQUIRED_AGENTS = (["scout", "planner", "builder", "documenter", "medic",
                     CHAIR_PROPOSE, CHAIR_CONFIRM] + SEATS)
 
-REQUIRED_APPROVALS = 5      # of the six seats — a supermajority green-lights
-MAX_COUNCIL_ROUNDS = 2      # original attempt + one feedback-driven revision
+REQUIRED_APPROVALS = 4      # ceil(2/3 of six) — a true supermajority green-lights
+SOFT_ACCEPT_APPROVALS = 3   # final round only: half the council + a clean carryover
+                            # ledger lands the build with reservations on record
+MAX_COUNCIL_ROUNDS = 3      # original attempt + two feedback-driven revisions
 MAX_FIX_LOOPS = 3
 
-DIMENSIONS_HINT = ("plan-conformance, correctness & edge cases, security & "
-                   "permissions, test adequacy, regressions & blast radius, "
-                   "simplicity & maintainability")
+DIMENSIONS_HINT = ("derive the dimensions FROM THE REQUEST, don't copy a menu. "
+                   "A user-facing change earns a product-fidelity/UX seat (does "
+                   "the built thing serve the workflow the requester described); "
+                   "a pipeline change earns data-integrity; every change earns "
+                   "plan-conformance and regressions. Classic dimensions to draw "
+                   "on when they apply: correctness & edge cases, security & "
+                   "permissions, test adequacy, maintainability. A dimension "
+                   "this change cannot violate is a benched seat (applicable: "
+                   "false), never a filler brief")
+
+CARRYOVER_RULE = ("Round discipline: this is a revision round. A seat may vote "
+                  "reject ONLY over (a) a carried-over blocker from the previous "
+                  "round that is still unfixed, or (b) a regression this "
+                  "remediation itself introduced. Anything newly discovered that "
+                  "the previous round did not flag is an advisory (severity "
+                  "major/nit, origin new) — it rides into the record but does "
+                  "not veto. The acceptance bar was set when the round-1 plan "
+                  "was committed; it does not grow while the builder is fixing.")
 
 DOCUMENT_NOTES = ("Read diff_path in full before writing. Document only what the "
                   "diff shows, then copy the write-up into app_docs/ as your task "
@@ -84,33 +113,50 @@ def assignments_cover_council(envelope, run) -> GateReport:
 
 
 def vote_consistent(envelope, run) -> GateReport:
-    """A rejection must say why; an approval must not carry blockers."""
+    """A rejection needs at least one severity-blocker; an approval must not
+    carry one. Majors and nits are advisories — they ride with either vote."""
     report = GateReport()
+    hard = [b for b in envelope.blocking if b.severity == "blocker"]
     if envelope.approve:
-        report.check("approve", not envelope.blocking,
-                     "approved but blocking items present" if envelope.blocking else "")
+        report.check("approve", not hard,
+                     f"approved but {len(hard)} severity-blocker item(s) present — "
+                     f"downgrade them to major/nit or vote reject" if hard else "")
     else:
-        report.check("reject", bool(envelope.blocking),
-                     "" if envelope.blocking else
-                     "rejected without a single blocking item — name the gap")
+        report.check("reject", bool(hard),
+                     "" if hard else
+                     "rejected without a single severity-blocker item — a major "
+                     "or nit is an advisory, not a veto; name the genuine gap "
+                     "or approve with advisories")
     return report
 
 
 # ── feedback synthesis (code disposes: votes in, one envelope out) ──────────────
 
 def council_feedback(votes: list[tuple[str, CouncilVoteOutput]], tally: str) -> ReviewOutput:
-    """Fold every seat's rejection into the one envelope the next round consumes."""
-    blocking = [f"[{seat}] {item}" for seat, vote in votes
-                for item in vote.blocking if not vote.approve]
+    """Fold every seat's rejection into the one envelope the next round consumes.
+
+    Only severity-blocker items become next-round obligations — this is the
+    anti-ratchet. Majors and nits ride along as advisories the builder MAY take,
+    so the acceptance bar is fixed once and the loop can converge.
+    """
+    blocking = [f"[{seat}] {b.item}" for seat, vote in votes
+                for b in vote.blocking if not vote.approve and b.severity == "blocker"]
+    advisories = [f"[{seat}] ({b.severity}) {b.item}" for seat, vote in votes
+                  for b in vote.blocking if b.severity != "blocker"]
     findings = [ReviewFinding(requirement=f"[{seat}] {f.requirement}",
                               met=f.met, evidence=f.evidence)
                 for seat, vote in votes for f in vote.findings]
+    notes = ("Address every blocking item; each is prefixed with the seat that "
+             "raised it, and the seat reviews in context_handoff/council/ carry "
+             "the full argument. These blockers are the COMPLETE acceptance bar "
+             "for the next round — the council may not add new ones.")
+    if advisories:
+        notes += (" Advisory (non-blocking, take them if cheap): "
+                  + "; ".join(advisories))
     return ReviewOutput(
         status="success", approved=False, findings=findings, blocking=blocking,
         summary=f"council rejected the build ({tally})",
-        notes_for_next_agent=("Address every blocking item. Each is prefixed with "
-                              "the seat that raised it; the seat reviews in "
-                              "context_handoff/council/ carry the full argument."))
+        notes_for_next_agent=notes)
 
 
 def test_feedback(result) -> ReviewOutput:
@@ -192,9 +238,11 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
 
     build: BuildOutput | None = None
 
-    def do_round(round_no: int, feedback: ReviewOutput | None) -> tuple[bool, str, ReviewOutput | None]:
+    def do_round(round_no: int, feedback: ReviewOutput | None) -> tuple[str, str, ReviewOutput | None]:
         """One full round: scout → plan → build → test → council vote → tally.
-        Returns (green_lit, tally, feedback_for_next_round)."""
+        Returns (verdict, tally, feedback) where verdict is "green" (supermajority,
+        land clean), "soft" (final round, majority — land with the residual
+        blockers on record as a follow-up spec), or "red" (loop or fail)."""
         nonlocal build
         tag = f"_r{round_no}"
 
@@ -259,10 +307,31 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                                           gates=[gates.diff_matches_claims]))
 
         if test is not None and not test.passed:
-            return False, "suite red — council not convened", test_feedback(test)
+            return "red", "suite red — council not convened", test_feedback(test)
 
         # ── the council convenes ────────────────────────────────────────────
         seat_lines = "\n".join(f"- {seat}" for seat in SEATS)
+        revision_note = ""
+        if round_no > 1:
+            feedback_path = council_dir / f"feedback_r{round_no}.md"
+            revision_note = (
+                f"\nThis is revision round {round_no}. The previous round's blockers "
+                f"are at {feedback_path} — they are the COMPLETE acceptance bar. "
+                f"Briefs must direct each seat to its carried-over blockers and to "
+                f"regressions the remediation may have introduced; briefs must NOT "
+                f"open new review scope. {CARRYOVER_RULE}\n")
+        chair_context = (
+            f"Beyond the assignments, fill `shared_context`: the context pack every "
+            f"seat reads before voting. State (1) what the requester is actually "
+            f"trying to achieve, in plain words; (2) the definition of done — which "
+            f"plan sections are the acceptance criteria; (3) explicit non-goals; "
+            f"(4) a do-not-block list: style, formatting, micro-optimisation, "
+            f"hypothetical inputs the product cannot produce, and any work the "
+            f"request never asked for. Severity legend for seats: only `blocker` "
+            f"items veto; `major`/`nit` are advisories. A seat whose dimension "
+            f"this change cannot violate gets `applicable: false` and is benched "
+            f"(auto-approves) — bench honestly rather than inventing a lens.")
+
         with run.phase(PhaseParams(name=f"split{tag}", kind="agent", owner=CHAIR_PROPOSE, retries=1,
                                    description="First chair divides the review into one "
                                                "concrete brief per seat")) as ph:
@@ -272,7 +341,8 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                         f"Seats (exact agent names, one brief each):\n{seat_lines}\n"
                         f"Strong seats: seat-fable, seat-opus, seat-terra — give them "
                         f"the subtlest dimensions.\n"
-                        f"Dimensions to adapt, not copy: {DIMENSIONS_HINT}.\n\n"
+                        f"Dimensions: {DIMENSIONS_HINT}.\n"
+                        f"{revision_note}\n{chair_context}\n\n"
                         f"The original request:\n{prompt}"),
                 previous=build,
                 gates=[assignments_cover_council]))
@@ -285,17 +355,30 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                 prompt=(f"AUDIT the proposed split in previous_envelope against the "
                         f"actual change on disk. Reassign or rewrite any brief that "
                         f"is vague, redundant, or aimed at the wrong risk, then emit "
-                        f"the FINAL assignments.\n"
-                        f"Seats (exact agent names, one brief each):\n{seat_lines}\n\n"
+                        f"the FINAL assignments and the final `shared_context`.\n"
+                        f"Seats (exact agent names, one brief each):\n{seat_lines}\n"
+                        f"{revision_note}\n{chair_context}\n\n"
                         f"The original request:\n{prompt}"),
                 previous=split,
                 gates=[assignments_cover_council]))
 
         briefs = {a.seat: a for a in final_split.assignments}
+        roster_lines = "\n".join(
+            f"- {a.seat}: {a.focus}" + ("" if a.applicable else " (benched)")
+            for a in final_split.assignments)
         votes: list[tuple[str, CouncilVoteOutput]] = []
         for seat in SEATS:
             brief = briefs[seat]
+            if not brief.applicable:
+                # A benched seat has no dimension to violate — its non-objection
+                # is recorded as an approval without spending a review.
+                votes.append((seat, CouncilVoteOutput(
+                    status="success", approve=True,
+                    summary=f"benched by the chairs: {brief.focus} does not "
+                            f"apply to this change")))
+                continue
             review_path = council_dir / f"{seat}{tag}.md"
+            seat_rules = (CARRYOVER_RULE + "\n\n") if round_no > 1 else ""
             with run.phase(PhaseParams(name=f"vote_{seat}{tag}", kind="agent", owner=seat,
                                        retries=1,
                                        description=f"Seat reviews its brief — {brief.focus} — "
@@ -304,6 +387,12 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                     output_type=CouncilVoteOutput,
                     prompt=(f"Council round {round_no}. Your focus: {brief.focus}\n"
                             f"Chairs' instructions: {brief.instructions}\n\n"
+                            f"Chairs' shared context (read before voting):\n"
+                            f"{final_split.shared_context or '(none provided)'}\n\n"
+                            f"The full council, so you know what the other seats "
+                            f"cover (do not wander into their lenses, and do not "
+                            f"block on their behalf):\n{roster_lines}\n\n"
+                            f"{seat_rules}"
                             f"The original request:\n{prompt}\n\n"
                             f"Write your review to {review_path} and list it in "
                             f"artifacts."),
@@ -312,29 +401,38 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                 votes.append((seat, vote))
 
         approvals = sum(1 for _, vote in votes if vote.approve)
-        tally = f"{approvals}/{len(SEATS)} approvals, {REQUIRED_APPROVALS} required"
+        final_round = round_no >= MAX_COUNCIL_ROUNDS
+        green = approvals >= REQUIRED_APPROVALS
+        soft = final_round and not green and approvals >= SOFT_ACCEPT_APPROVALS
+        tally = (f"{approvals}/{len(SEATS)} approvals, {REQUIRED_APPROVALS} required"
+                 + (f" (soft-accept floor {SOFT_ACCEPT_APPROVALS} on the final round)"
+                    if final_round else ""))
         with run.phase(PhaseParams(name=f"tally{tag}", kind="code", owner="council",
                                    description="Count the votes — the green light is "
                                                "arithmetic, not judgement")) as ph:
-            ph.log(tally=tally, green_lit=approvals >= REQUIRED_APPROVALS,
+            ph.log(tally=tally, green_lit=green, soft_accepted=soft,
                    **{seat: ("approve" if vote.approve else "reject")
                       for seat, vote in votes})
 
-        if approvals >= REQUIRED_APPROVALS:
-            return True, tally, None
-        return False, tally, council_feedback(votes, tally)
+        if green:
+            return "green", tally, None
+        if soft:
+            # Land with reservations: the residual blockers become a follow-up
+            # spec in the repo, not a discarded working tree.
+            return "soft", tally, council_feedback(votes, tally)
+        return "red", tally, council_feedback(votes, tally)
 
     # ── the recovery loop: a crashed round is diagnosed, never fatal ─────────
     # The medic's diagnosis re-enters through the same door a council rejection
     # uses, so recovery and revision are one mechanism. "abort" is the medic
     # saying a retry would fail identically — the run ends with the diagnosis
     # on record instead of a stack trace.
-    green = False
+    verdict = "red"
     tally = "no round completed"
     feedback: ReviewOutput | None = None
     for round_no in range(1, MAX_COUNCIL_ROUNDS + 1):
         try:
-            green, tally, feedback = do_round(round_no, feedback)
+            verdict, tally, feedback = do_round(round_no, feedback)
         except Exception as error:
             try:
                 diagnosis = diagnose(f"round {round_no}", error, previous=build)
@@ -346,11 +444,25 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                 break
             feedback = diagnosis_feedback(diagnosis, round_no)
             continue
-        if green:
+        if verdict in ("green", "soft"):
             break
 
-    # Only a green-lit build lands. A rejected run leaves the plans committed,
-    # the working tree dirty, and the council's reasons in context_handoff/.
+    green = verdict in ("green", "soft")
+
+    # A soft acceptance lands the build but keeps the council's residual
+    # blockers on record IN THE REPO as a follow-up spec — stranding N rounds
+    # of working code uncommitted is worse than landing with reservations.
+    if verdict == "soft" and feedback is not None:
+        reservations_path = Path(run.repo_root) / "specs" / f"{run.adw_id}_council_reservations.md"
+        reservations_path.parent.mkdir(parents=True, exist_ok=True)
+        reservations_path.write_text(
+            f"# Council reservations — {run.adw_id}\n\n"
+            f"The council soft-accepted this build on its final round ({tally}).\n"
+            f"These residual blockers were NOT resolved and are follow-up work:\n\n"
+            + "\n".join(f"- {item}" for item in feedback.blocking) + "\n")
+
+    # Only a green-lit (or soft-accepted) build lands. A rejected run leaves the
+    # plans committed, the working tree dirty, and the reasons in context_handoff/.
     doc_note = ""
     if green and build is not None:
         try:
@@ -410,8 +522,11 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
             except Exception:
                 doc_note = f"; docs skipped — {error}"
 
-    return run.finish(accepted=green,
-                      reason=f"the council never green-lit the build ({tally}){doc_note}")
+    reason = {"green": f"council green-lit the build ({tally})",
+              "soft": f"council soft-accepted the build with reservations on "
+                      f"record in specs/ ({tally})",
+              }.get(verdict, f"the council never green-lit the build ({tally})")
+    return run.finish(accepted=green, reason=f"{reason}{doc_note}")
 
 
 if __name__ == "__main__":

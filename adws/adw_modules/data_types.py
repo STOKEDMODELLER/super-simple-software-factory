@@ -134,6 +134,10 @@ class CouncilAssignment(BaseModel):
     seat: str                       # agent name of the seat holding this brief
     focus: str                      # the dimension: plan-conformance, security, tests…
     instructions: str = ""          # what specifically to examine, and where to look
+    applicable: bool = True         # False benches the seat: its dimension does not
+                                    # exist in this change, and it auto-approves —
+                                    # a chair inventing filler lenses is worse than
+                                    # an honest "nothing here for this seat"
 
 
 class CouncilSplitOutput(EnvelopeBase):
@@ -145,6 +149,10 @@ class CouncilSplitOutput(EnvelopeBase):
     """
 
     assignments: list[CouncilAssignment] = Field(default_factory=list)
+    shared_context: str = ""        # the context pack every seat receives verbatim:
+                                    # what the request is really about, what "done"
+                                    # means, explicit non-goals, and what must NOT
+                                    # block (style, hypotheticals, unrequested work)
 
 
 class DiagnosisOutput(EnvelopeBase):
@@ -162,23 +170,53 @@ class DiagnosisOutput(EnvelopeBase):
     fix_instructions: str = ""      # concrete steps for the next round or the engineer
 
 
+class CouncilBlocker(BaseModel):
+    """One item a seat says must change, with how hard it may block.
+
+    severity is the anti-ratchet: only "blocker" items veto a build.
+    - blocker: violates the request or the plan's acceptance criteria, breaks
+      existing behavior, or fails a test that encodes a plan requirement.
+    - major: a real defect the request never asked to prevent — advisory.
+    - nit: style, formatting, micro-optimisation — advisory, never blocks.
+    origin says where the demand comes from: "request", "plan", "carryover"
+    (a prior round's unresolved blocker), or "new" (discovered this round).
+    In rounds after the first, "new" items may not carry severity "blocker"
+    unless they are regressions the remediation itself introduced.
+    """
+
+    item: str
+    severity: Literal["blocker", "major", "nit"] = "blocker"
+    origin: str = "new"
+
+
 class CouncilVoteOutput(EnvelopeBase):
     """One seat's verdict on its assigned slice of the review.
 
-    `approve` is the vote. A rejection must carry at least one blocking item —
-    the council's feedback loop is built from these, so a reasonless rejection
-    is a gate failure, not an opinion.
+    `approve` is the vote. A rejection must carry at least one severity-blocker
+    item — the council's feedback loop is built from these, so a reasonless
+    rejection is a gate failure, not an opinion. Approving WITH major/nit
+    advisories is legitimate and expected: an advisory rides into the record
+    without vetoing the build.
     """
 
     approve: bool = False
     findings: list[ReviewFinding] = Field(default_factory=list)
-    blocking: list[str] = Field(default_factory=list)
+    blocking: list[CouncilBlocker] = Field(default_factory=list)
+
+    @field_validator("blocking", mode="before")
+    @classmethod
+    def _coerce_blockers(cls, value):
+        """Accept plain strings (older prompt formats) as full-strength blockers."""
+        if isinstance(value, list):
+            return [CouncilBlocker(item=item) if isinstance(item, str) else item
+                    for item in value]
+        return value
 
 
 # ── Deterministic quality blocks ─────────────────────────────────────────────
 
 QualityArea = Literal["frontend", "backend"]
-QualityOperation = Literal["lint", "typecheck", "build"]
+QualityOperation = Literal["lint", "typecheck", "build", "test"]
 
 
 class QualityCheckSpec(BaseModel):
@@ -189,6 +227,8 @@ class QualityCheckSpec(BaseModel):
     operation: QualityOperation
     argv: list[str]
     timeout_seconds: int = 120
+    cwd: str = ""                   # relative to repo root — for suites that live
+                                    # in a nested repo (meta-repo layouts)
 
 
 class QualityCheckResult(BaseModel):
