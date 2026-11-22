@@ -121,6 +121,10 @@ obs:
 reconcile:
     uv run adws/adw_workspace.py --config {{config}} reconcile
 
+# Print the worker delta, including partial work recovered after interruption.
+review-run ID:
+    uv run adws/adw_workspace.py --config {{config}} review "$1"
+
 # Apply a reviewed worker.patch without staging operator files.
 apply-run ID:
     uv run adws/adw_workspace.py --config {{config}} apply "$1"

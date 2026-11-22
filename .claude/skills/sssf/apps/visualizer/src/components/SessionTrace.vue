@@ -356,6 +356,7 @@ function blockDurationMs(p: Phase): number {
 }
 
 const STATUS_GLYPH: Record<string, string> = {
+  interrupted: '■',
   success: '✓',
   fail: '✗',
   running: '●',
@@ -405,7 +406,7 @@ const sessionDurationMs = computed(() => {
   if (!s) return NaN
   const start = ts(s.started_at)
   if (!Number.isFinite(start)) return NaN
-  const end = s.status === 'running' ? nowMs.value : ts(s.ended_at)
+  const end = s.status === 'running' ? nowMs.value : ts(s.status === 'unresponsive' ? s.heartbeat_at : s.ended_at)
   return (Number.isFinite(end) ? end : nowMs.value) - start
 })
 
@@ -416,6 +417,11 @@ function selectPhase(p: Phase) {
 // Council tally rows are ordinary events so older databases remain readable.
 // Prefer the explicit tally fields, but keep the raw payload visible when a
 // legacy writer used a different shape or value type.
+function displayTallyValue(item: unknown): string {
+  if (Array.isArray(item)) return item.length ? item.join(', ') : 'none'
+  return item === null || item === undefined || item === '' ? '—' : String(item)
+}
+
 const councilTally = computed(() => {
   for (const event of events.value.toReversed()) {
     if (!event.payload_json) continue
@@ -423,18 +429,13 @@ const councilTally = computed(() => {
       const value = JSON.parse(event.payload_json) as Record<string, unknown>
       const keys = ['reviewed', 'approved', 'objected', 'benched', 'residual_blockers']
       if (!value || typeof value !== 'object' || !('tally' in value) || !keys.every((key) => key in value)) continue
-      const display = (item: unknown): string => {
-        if (Array.isArray(item)) return item.length ? item.map(String).join(', ') : 'none'
-        if (item === null || item === undefined || item === '') return '—'
-        return String(item)
-      }
       return {
         decision: value.soft_accepted ? 'Accepted with reservations' : value.green_lit ? 'Approved' : 'Rejected',
-        reviewed: display(value.reviewed),
-        approved: display(value.approved),
-        objected: display(value.objected),
-        benched: display(value.benched),
-        residual_blockers: display(value.residual_blockers),
+        reviewed: displayTallyValue(value.reviewed),
+        approved: displayTallyValue(value.approved),
+        objected: displayTallyValue(value.objected),
+        benched: displayTallyValue(value.benched),
+        residual_blockers: displayTallyValue(value.residual_blockers),
         raw: event.payload_json,
       }
     } catch {

@@ -38,7 +38,7 @@ Three mechanisms keep the loop convergent instead of a ratchet:
      later round — revision-round seats may reject only over carried-over
      blockers still unfixed or regressions the remediation itself introduced.
   3. Benching. A chair marks a seat `applicable: false` when its dimension does
-     not exist in the change; the seat auto-approves instead of inventing a lens.
+     not exist in the change; the seat abstains.
 
 Rejection is a loop, not a verdict. Code collects every seat's severity-blocker
 items into one feedback envelope, writes it to context_handoff/council/, and the
@@ -129,6 +129,31 @@ def vote_consistent(envelope, run) -> GateReport:
 
 
 # ── feedback synthesis (code disposes: votes in, one envelope out) ──────────────
+
+def council_tally(votes: list[tuple[str, CouncilVoteOutput]], final_round: bool) -> dict:
+    """Return the decision and its evidence. An inapplicable seat has no vote."""
+    benched = len(SEATS) - len(votes)
+    reviewed = len(votes)
+    approvals = sum(vote.approve for _, vote in votes)
+    objected = reviewed - approvals
+    # The denominator is real reviews, never automatic bench approvals.
+    # A round with no applicable review cannot green-light by arithmetic.
+    required = max(1, (2 * reviewed + 2) // 3)
+    soft_floor = max(1, (reviewed + 1) // 2)
+    green = reviewed > 0 and approvals >= required
+    soft = final_round and not green and reviewed > 0 and approvals >= soft_floor
+    residual = [f"[{seat}] {b.item}" for seat, vote in votes
+                if not vote.approve for b in vote.blocking if b.severity == "blocker"]
+    tally = (f"reviewed {reviewed}/{len(SEATS)}, approved {approvals}, "
+             f"objected {objected}, benched {benched}; "
+             f"{required} approvals required of reviewed seats"
+             + (f" (soft-accept floor {soft_floor} on final round)"
+                if final_round else ""))
+    return dict(tally=tally, green_lit=green, soft_accepted=soft,
+                reviewed=reviewed, approved=approvals, objected=objected,
+                benched=benched, required_approvals=required, residual_blockers=residual,
+                landing_decision="green" if green else "soft" if soft else "red")
+
 
 def council_feedback(votes: list[tuple[str, CouncilVoteOutput]], tally: str) -> ReviewOutput:
     """Fold every seat's rejection into the one envelope the next round consumes.
@@ -392,39 +417,18 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                     gates=[gates.artifacts_exist, vote_consistent]))
                 votes.append((seat, vote))
 
-        benched = len(SEATS) - len(votes)
-        reviewed = len(votes)
-        approvals = sum(vote.approve for _, vote in votes)
-        objected = reviewed - approvals
-        # The denominator is real reviews, never automatic bench approvals.
-        # A round with no applicable review cannot green-light by arithmetic.
-        required = max(1, (2 * reviewed + 2) // 3)
-        soft_floor = max(1, (reviewed + 1) // 2)
-        final_round = round_no >= MAX_COUNCIL_ROUNDS
-        green = reviewed > 0 and approvals >= required
-        soft = final_round and not green and reviewed > 0 and approvals >= soft_floor
-        residual = [f"[{seat}] {b.item}" for seat, vote in votes
-                    if not vote.approve for b in vote.blocking if b.severity == "blocker"]
-        tally = (f"reviewed {reviewed}/{len(SEATS)}, approved {approvals}, "
-                 f"objected {objected}, benched {benched}; "
-                 f"{required} approvals required of reviewed seats"
-                 + (f" (soft-accept floor {soft_floor} on final round)"
-                    if final_round else ""))
+        result = council_tally(votes, round_no >= MAX_COUNCIL_ROUNDS)
+        tally = result["tally"]
         with run.phase(PhaseParams(name=f"tally{tag}", kind="code", owner="council",
                                    description="Count the votes — the green light is "
                                                "arithmetic, not judgement")) as ph:
-            ph.log(tally=tally, green_lit=green, soft_accepted=soft,
-                   reviewed=reviewed, approved=approvals, objected=objected,
-                   benched=benched, denominator=f"{reviewed} applicable seats",
-                   required_approvals=required, residual_blockers=residual,
-                   landing_decision=("green" if green else "soft" if soft else "red"),
+            ph.log(**result,
                    **{seat: "benched" for seat in SEATS if not briefs[seat].applicable},
-                   **{seat: ("approve" if vote.approve else "reject")
-                      for seat, vote in votes})
+                   **{seat: "approve" if vote.approve else "reject" for seat, vote in votes})
 
-        if green:
+        if result["green_lit"]:
             return "green", tally, None
-        if soft:
+        if result["soft_accepted"]:
             # Land with reservations: the residual blockers become a follow-up
             # spec in the repo, not a discarded working tree.
             return "soft", tally, council_feedback(votes, tally)

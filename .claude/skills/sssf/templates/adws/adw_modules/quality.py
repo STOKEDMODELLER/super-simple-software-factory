@@ -8,10 +8,7 @@ deciding.
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║  REPLACE THE PLACEHOLDER COMMANDS BELOW.                                     ║
 ║                                                                              ║
-║  Every block ships as an `echo` that exits 0 and announces it is fake. They   ║
-║  are placeholders on purpose: a stamped repo has no way to guess your test    ║
-║  runner, and a wrong-but-plausible command that silently passes is worse      ║
-║  than one that says so out loud.                                             ║
+║  Unconfigured checks return a failure explaining which command to configure. ║
 ║                                                                              ║
 ║  For each block you want: swap `_placeholder(...)` for the real argv, e.g.    ║
 ║      argv=["bun", "test", "apps/web/server.test.ts"]                         ║
@@ -32,12 +29,14 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Callable
 
 from .data_types import (EventRecord, QualityCheckResult, QualityCheckSpec, QualityResult,
                          VerifyOutput)
+from .runtime import terminate_group
 from .utils import now_iso, operator_env
 
 # How much of a failing command's output rides back inside the envelope. Enough
@@ -47,9 +46,9 @@ TAIL_CHARS = 4_000
 
 
 def _placeholder(name: str) -> list[str]:
-    """A command that does nothing and admits it. Replace every call to this."""
-    return ["echo", f"PLACEHOLDER {name}: edit adws/adw_modules/quality.py and "
-                    f"replace this echo with the real {name} command"]
+    """An unwired quality gate must never report a passing test."""
+    return [sys.executable, "-c", "import sys; sys.exit(sys.argv[1])",
+            f"Configure the {name} command in adws/adw_modules/quality.py."]
 
 
 def _check_dir(run, name: str) -> Path:
@@ -59,7 +58,7 @@ def _check_dir(run, name: str) -> Path:
     return path
 
 
-def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
+def run_check(spec: QualityCheckSpec, run) -> QualityCheckResult:
     phase = run.phases[-1]
     output_dir = _check_dir(run, spec.name)
     output_artifact = output_dir / "command.log"
@@ -72,21 +71,26 @@ def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
     stdout = ""
     stderr = ""
     try:
-        completed = subprocess.run(
-            spec.argv,
-            cwd=(Path(run.repo_root) / spec.cwd) if spec.cwd else run.repo_root,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=spec.timeout_seconds,
-        )
-        returncode = completed.returncode
-        stdout = completed.stdout
-        stderr = completed.stderr
-    except subprocess.TimeoutExpired as error:
-        returncode = 124
-        stdout = error.stdout or ""
-        stderr = (error.stderr or "") + f"\nTimed out after {spec.timeout_seconds}s."
+        directory = (Path(run.repo_root) / spec.cwd).resolve()
+        if not directory.is_relative_to(run.repo_root):
+            raise ValueError(f"quality command cwd is outside the run worktree: {spec.cwd}")
+        process = subprocess.Popen(spec.argv, cwd=directory, env=env, start_new_session=True,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            run.tracer.process_start(run.adw_id, "check", spec.name, process.pid, command)
+            try:
+                stdout, stderr = process.communicate(timeout=spec.timeout_seconds)
+                returncode = process.returncode
+            except subprocess.TimeoutExpired:
+                terminate_group(process.pid)
+                stdout, stderr = process.communicate()
+                stderr += f"\nTimed out after {spec.timeout_seconds}s."
+                returncode = 124
+        finally:
+            if process.poll() is None:
+                terminate_group(process.pid)
+                process.wait()
+            run.tracer.process_end(run.adw_id, process.pid)
     except OSError as error:
         # A missing binary lands here as exit 127 with the real message — no
         # pre-flight probe needed, and none wanted.
@@ -137,7 +141,7 @@ def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
 
 def test(run) -> QualityCheckResult:
     """Run the project's test suite. The highest-value block to wire up first."""
-    return _run(QualityCheckSpec(
+    return run_check(QualityCheckSpec(
         name="test",
         area="backend",
         operation="build",
@@ -147,7 +151,7 @@ def test(run) -> QualityCheckResult:
 
 
 def lint(run) -> QualityCheckResult:
-    return _run(QualityCheckSpec(
+    return run_check(QualityCheckSpec(
         name="lint",
         area="backend",
         operation="lint",
@@ -156,7 +160,7 @@ def lint(run) -> QualityCheckResult:
 
 
 def typecheck(run) -> QualityCheckResult:
-    return _run(QualityCheckSpec(
+    return run_check(QualityCheckSpec(
         name="typecheck",
         area="backend",
         operation="typecheck",
@@ -166,7 +170,7 @@ def typecheck(run) -> QualityCheckResult:
 
 def build(run) -> QualityCheckResult:
     output_dir = _check_dir(run, "build") / "bundle"
-    return _run(QualityCheckSpec(
+    return run_check(QualityCheckSpec(
         name="build",
         area="backend",
         operation="build",

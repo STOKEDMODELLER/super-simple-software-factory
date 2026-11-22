@@ -140,6 +140,13 @@ export class SssfDb {
     return this.hasColumn(table, column) ? column : `NULL AS ${column}`;
   }
 
+  private sessionStatus(): string {
+    if (!this.hasColumn("sessions", "heartbeat_at")) return "status";
+    return `CASE WHEN status = 'running' AND heartbeat_at IS NOT NULL AND
+            (julianday('now') - julianday(heartbeat_at)) * 86400 > 60
+            THEN 'unresponsive' ELSE status END AS status`;
+  }
+
   close(): void {
     this.writer?.close();
     this.db.close();
@@ -171,7 +178,7 @@ export class SssfDb {
     const rows = this.db
       .query<Session, [number]>(
         `SELECT adw_id, ${this.optionalColumn("sessions", "adw_name")}, request,
-                status, engineer, started_at, ended_at,
+                ${this.sessionStatus()}, engineer, started_at, ended_at, ${this.optionalColumn("sessions", "heartbeat_at")},
                 total_tokens, total_cost,
                 ${this.optionalColumn("sessions", "archived")}
            FROM sessions
@@ -222,7 +229,7 @@ export class SssfDb {
   /** One read-side batch for the live ledger; cursors make timeline data incremental. */
   sessionsLive(cursors: Record<string, number> = {}): SessionsLiveResponse {
     const sessions = this.sessions();
-    const timelines: Record<string, EventsPage> = {};
+    const timelines: SessionsLiveResponse["timelines"] = Object.create(null);
     const visible: Record<string, number> = Object.create(null);
     for (const { adw_id } of sessions) {
       const cursor = cursors[adw_id] ?? 0;
@@ -237,7 +244,7 @@ export class SssfDb {
         ORDER BY e.rowid LIMIT 1500`,
     ).all(JSON.stringify(visible));
     for (const row of rows) {
-      const page = timelines[row.adw_id] ??= { events: [], cursor: 0, has_more: false };
+      const page = timelines[row.adw_id] ??= { events: [], cursor: 0 };
       page.events.push(row);
       page.cursor = row.rowid;
     }
@@ -249,7 +256,7 @@ export class SssfDb {
       this.db
         .query<Session, [string]>(
           `SELECT adw_id, ${this.optionalColumn("sessions", "adw_name")}, request,
-                  status, engineer, started_at, ended_at,
+                  ${this.sessionStatus()}, engineer, started_at, ended_at, ${this.optionalColumn("sessions", "heartbeat_at")},
                   total_tokens, total_cost
              FROM sessions WHERE adw_id = ?`,
         )

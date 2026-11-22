@@ -84,6 +84,16 @@ Re-running `install.py` is safe. It skips every file that already exists and rep
 
 Green on the smoke test means the whole path works: config validated, session minted, Pi ran, envelope parsed, events landed in `adws/adw_data/sssf.db`. Fix it there before composing anything larger, because every multi-agent chain rides this exact path.
 
+### Review and apply a run
+
+A workflow starts at the operator's committed `HEAD` in a detached Git worktree. The operator's staged files, local edits and untracked files stay in the original checkout. The selected roster is read before entering the worker. Worker processes still run under the operator's OS account.
+
+Each run retains a binary Git patch at `adws/adw_data/sessions/<run-id>/worker.patch`, including partial work after interruption. Inspect it with `just review-run <run-id>` or a diff viewer. Run `just apply-run <run-id>` to apply the reviewed changes to your working tree. This checks the affected paths for staged, unstaged and untracked conflicts and leaves the index alone. A resumed run with the same ID uses its recorded base and patch.
+
+The runtime rejects nested launches and permits four concurrent workflows by default. Set `defaults.max_concurrency`, `defaults.budget_cost` (default 5 USD per run), and `defaults.budget_tokens` (default 0, unlimited) in your roster. Spend checks run on each provider-reported assistant response, so the final response can exceed the configured threshold. Configure `defaults.acceptance_checks` with named quality commands to verify behavior in addition to the changed-file list. Each entry takes `name`, `area`, `operation`, `argv`, and optional `cwd` and `timeout_seconds`.
+
+Active workers record heartbeats. After a hard kill, the next workflow or `just reconcile` recovers the partial patch, releases the slot, and marks the run interrupted. `just obs` runs reconciliation before opening the dashboard. Unresponsive means the dashboard has stopped receiving heartbeats. In council traces, benched seats abstain. Two thirds of applicable votes approve, and half can accept with reservations on the final round. At least one substantive review is required.
+
 ### Which API keys you actually need
 
 That depends on your roster, not on this repo. Every `model:` in `sssf.config.yaml` is written `provider/model-id`, and the provider half decides the key. Which key pi reads for a given provider comes from `~/.pi/agent/models.json`.
@@ -353,7 +363,7 @@ Honest edges, because knowing them is cheaper than discovering them.
 
 | Failure | What actually happens | What to do |
 |---|---|---|
-| The test phase reports green on a fresh install | `quality.py` ships placeholder commands that exit 0. Three ADWs run them as their test phase | Wire your real commands into `quality.py` before trusting `adw_build_test`, `adw_plan_build_test`, or `adw_simple_sdlc`. This is the first thing to customize |
+| The test phase reports an unconfigured command | `quality.py` ships placeholder commands that fail until configured. Three ADWs run them as their test phase | Wire your real commands into `quality.py` before trusting `adw_build_test`, `adw_plan_build_test`, or `adw_simple_sdlc`. This is the first thing to customize |
 | A bare model pattern | The same model sits under several providers, so `gemini-3.6-flash` matches three catalog entries and `agents.validate()` refuses to spawn | Always write `provider/model-id` |
 | `just` is not installed | The stamped `justfile` is a convenience wrapper, nothing depends on it | Every recipe is a one-line `uv run` or `sqlite3` command. Open the justfile and run the line yourself |
 | A coding agent hangs silently | No events, no tokens, an empty `raw_output.jsonl`. The trace goes quiet rather than red | Query `processes` for what is alive and kill it children-first. A killed run finalizes its own trace to `fail` |
@@ -380,7 +390,7 @@ Where to start, roughly in the order that pays off fastest:
 
 | Change | File | Why |
 |---|---|---|
-| Your real commands | `adws/adw_modules/quality.py` | The shipped blocks are placeholders that exit 0. Until you wire this, your test phase is theater |
+| Your real commands | `adws/adw_modules/quality.py` | The shipped placeholders fail until you wire the real checks |
 | Your prompts | `adws/adw_data/prompt_engineering/{agent}/` | Where your standards live: what a good plan looks like, what a review has to catch |
 | Your roster | `adws/adw_sssf_config/sssf.config.yaml` | Models, thinking levels, tools, and what each agent is allowed to write |
 | Your chains | `adws/adw_*.py` | Copy the closest workflow and edit the phase list. They are 40 to 180 lines on purpose |

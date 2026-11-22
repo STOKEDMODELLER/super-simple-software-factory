@@ -9,6 +9,7 @@ const ICONS: Record<string, unknown> = {
   running: LoaderCircle,
   queued: Circle,
   interrupted: CircleStop,
+  unresponsive: CircleStop,
 }
 </script>
 

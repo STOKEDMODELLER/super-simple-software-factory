@@ -222,11 +222,11 @@ QualityOperation = Literal["lint", "typecheck", "build", "test"]
 class QualityCheckSpec(BaseModel):
     """One deterministic quality command."""
 
-    name: str
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
     area: QualityArea
     operation: QualityOperation
-    argv: list[str]
-    timeout_seconds: int = 120
+    argv: list[str] = Field(min_length=1)
+    timeout_seconds: int = Field(default=120, ge=1)
     cwd: str = ""                   # relative to repo root — for suites that live
                                     # in a nested repo (meta-repo layouts)
 
@@ -423,9 +423,10 @@ class ConfigDefaults(BaseModel):
         "adws/adw_modules/", "adws/adw_sssf_config/", "adws/adw_*.py",
     ])
     data_dir: str = "adws/adw_data"
+    acceptance_checks: list[QualityCheckSpec] = Field(default_factory=list)
     max_concurrency: int = Field(default=4, ge=1)
     budget_tokens: int = Field(default=0, ge=0)
-    budget_cost: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    budget_cost: float = Field(default=5.0, ge=0, allow_inf_nan=False)
     stale_after_seconds: int = Field(default=900, ge=1)
 
 

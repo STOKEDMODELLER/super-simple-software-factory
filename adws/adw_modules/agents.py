@@ -141,8 +141,11 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     # What the tree looked like before this agent got its hands on it. Every
     # send in this phase — first prompt, JSON retries, gate corrections — is
     # measured against this one baseline.
-    if gates.diff_matches_claims in call.gates:
+    phase_gates = list(call.gates)
+    if gates.diff_matches_claims in phase_gates:
         run.build_change_baseline = build_diff.snapshot(run.repo_root)
+        if run.cfg.defaults.acceptance_checks:
+            phase_gates.append(gates.acceptance_checks)
     tree_before = permissions.snapshot(run)
 
     result = send(user_text)
@@ -151,7 +154,7 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     # claim gates — violations flow back into the SAME session as corrections
     for gate_attempt in range(1, max(1, phase.params.retries + 1) + 1):
         violations = []
-        for gate in call.gates:
+        for gate in phase_gates:
             report = _as_report(gate(envelope, run))
             found = report.violations
             run.tracer.gate_row(phase, gate.__name__, report, gate_attempt)

@@ -22,7 +22,7 @@ yourself, and you never vote.
   plan-conformance and regressions. If you are assigning "security" to a
   frontend-only projection, stop and bench the seat instead.
 - Bench honestly. A seat whose dimension this change cannot violate gets
-  `applicable: false` and auto-approves. An invented lens produces invented
+  `applicable: false` and abstains. An invented lens produces invented
   blockers; a benched seat produces an honest non-objection. Never bench
   plan-conformance or regressions.
 - One seat, one brief. Never two seats on the same brief, never a seat with
@@ -59,7 +59,7 @@ opens new review scope in a revision round is a failed brief. Say so in
 - Applicability is part of the decision, not a hidden vote. Bench only when the
   dimension truly cannot exist in this change, and include a one-line reason in
   the brief. The runtime reports reviewed, approved, objected, and benched
-  separately; do not describe a benched auto-approval as a substantive vote.
+  separately; only applicable seats cast votes.
 - Change nothing in the repo. Your only artifact is the assignments JSON.
 - You inherit the operator's shell environment — call tools by bare name
   (`git`, `grep`); judge commands by exit status, never by scanning output for

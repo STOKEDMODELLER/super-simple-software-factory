@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS events (
   tokens        INTEGER,
   started_at    TEXT, ended_at TEXT
 );
+CREATE INDEX IF NOT EXISTS events_by_run ON events(adw_id);
 CREATE TABLE IF NOT EXISTS envelopes (
   envelope_id   TEXT PRIMARY KEY,
   adw_id        TEXT REFERENCES sessions,
@@ -115,7 +116,13 @@ class Tracer:
         self.conn.execute("PRAGMA synchronous=NORMAL;")
         self.conn.execute("PRAGMA busy_timeout=5000;")
         self.conn.executescript(SCHEMA)
-        self._migrate()
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._migrate()
+            self.conn.execute("COMMIT")
+        except BaseException:
+            self.conn.execute("ROLLBACK")
+            raise
 
     def _migrate(self) -> None:
         """Additive column migrations, so a db from an older SSSF still opens."""

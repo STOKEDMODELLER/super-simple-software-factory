@@ -37,7 +37,7 @@ const range = computed(() => {
     t0 = Math.min(...props.events.map((e) => ts(e.started_at)).filter(Number.isFinite))
   }
   if (!Number.isFinite(t0)) t0 = props.nowMs
-  let t1 = running.value ? props.nowMs : ts(s.ended_at)
+  let t1 = running.value ? props.nowMs : ts(s.status === 'unresponsive' ? s.heartbeat_at : s.ended_at)
   if (!Number.isFinite(t1)) {
     t1 = Math.max(...props.events.map((e) => ts(e.started_at)).filter(Number.isFinite))
   }
@@ -116,7 +116,7 @@ const durationMs = computed(() => {
   const s = props.session
   const start = ts(s.started_at)
   if (!Number.isFinite(start)) return NaN
-  const end = running.value ? props.nowMs : ts(s.ended_at)
+  const end = running.value ? props.nowMs : ts(s.status === 'unresponsive' ? s.heartbeat_at : s.ended_at)
   return (Number.isFinite(end) ? end : props.nowMs) - start
 })
 

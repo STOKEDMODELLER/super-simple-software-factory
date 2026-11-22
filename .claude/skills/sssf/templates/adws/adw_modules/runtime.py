@@ -26,7 +26,7 @@ def lease(directory):
     return handle
 
 
-def admit(db, run_id, maximum, operator, directory, base):
+def admit(db, run_id, maximum, operator, directory, base, engineer, workflow):
     conn = db.conn
     conn.execute("BEGIN IMMEDIATE")
     try:
@@ -35,6 +35,7 @@ def admit(db, run_id, maximum, operator, directory, base):
             raise AdmissionError(f"maximum concurrent runs reached ({maximum})")
         conn.execute("INSERT INTO run_leases VALUES (?,?,?,?)",
                      (run_id, str(operator), str(directory), base))
+        db.session_start(run_id, engineer, workflow)
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
@@ -52,6 +53,11 @@ def record_patch(operator, directory, base):
     # Refuse to traverse a replacement directory or symlink during cleanup.
     if work.is_symlink() or Path(os.fsdecode(git(work, "rev-parse", "--show-toplevel")).strip()).resolve() != work.resolve():
         raise RuntimeError(f"unexpected worktree at {work}")
+    ready = directory / "workspace.ready"
+    if not ready.exists():
+        # A crash while recreating a pinned workspace must preserve its prior patch.
+        git(operator, "worktree", "remove", "--force", str(work))
+        return
     target = directory / "worker.patch"
     tree = build_diff.snapshot(work)
     patch = git(work, "diff", "--binary", "--full-index", "--no-renames", "--no-ext-diff", base, tree)
@@ -60,6 +66,7 @@ def record_patch(operator, directory, base):
     tmp.replace(target)
     # The full delta is durable before disposing of any worker files.
     git(operator, "worktree", "remove", "--force", str(work))
+    ready.unlink(missing_ok=True)
 
 
 def safe_apply(patch_path, repo="."):
@@ -111,7 +118,10 @@ def terminate_group(pid):
         os.killpg(pid, signal.SIGTERM)
         for _ in range(20):
             time.sleep(.05)
-            os.killpg(pid, 0)
+            states = subprocess.check_output(["ps", "-axo", "pgid=,stat="], text=True)
+            if not any(group == str(pid) and not state.startswith("Z")
+                       for group, state in (line.split() for line in states.splitlines())):
+                return
         os.killpg(pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
@@ -146,7 +156,7 @@ def reconcile(tracer, stale_seconds):
             if not conn.execute("SELECT 1 FROM run_leases WHERE adw_id=?", (rid,)).fetchone():
                 continue
             for pid, birth in conn.execute("SELECT pid,birth FROM processes WHERE adw_id=? AND "
-                                           "kind='agent' AND ended_at IS NULL", (rid,)):
+                                           "kind IN ('agent','check') AND ended_at IS NULL", (rid,)):
                 if birth and process_birth(pid) == birth:
                     terminate_group(pid)
             retire(tracer, rid, Path(operator), directory, base, "interrupted")

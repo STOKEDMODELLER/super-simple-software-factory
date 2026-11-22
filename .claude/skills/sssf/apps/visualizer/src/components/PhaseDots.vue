@@ -8,6 +8,7 @@ const ordered = computed(() => props.phases.toSorted((a, b) => (a.seq ?? 0) - (b
 
 const glyph: Record<string, string> = {
   success: '●',
+  interrupted: '■',
   running: '◐',
   queued: '○',
   fail: '✗',

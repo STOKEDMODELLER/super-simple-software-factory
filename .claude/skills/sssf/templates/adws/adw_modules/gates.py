@@ -14,7 +14,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from . import build_diff
+from . import build_diff, quality
 from .data_types import EnvelopeBase, GateReport
 
 TAIL_CHARS = 1000        # command output kept as evidence on a failure
@@ -83,6 +83,15 @@ def diff_matches_claims(envelope: EnvelopeBase, run) -> GateReport:
     if not unchanged and not unreported:
         report.check("exact build diff", True,
                      f"{len(actual)} path(s), baseline excludes prior staged/unstaged work")
+    return report
+
+
+def acceptance_checks(envelope: EnvelopeBase, run) -> GateReport:
+    """Execute the operator's configured behavior checks inside the worker checkout."""
+    report = GateReport()
+    for spec in run.cfg.defaults.acceptance_checks:
+        result = quality.run_check(spec, run)
+        report.check(spec.name, result.passed, f"exit {result.returncode}; {result.output_artifact}")
     return report
 
 
