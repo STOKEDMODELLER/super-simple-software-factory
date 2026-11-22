@@ -423,6 +423,10 @@ class ConfigDefaults(BaseModel):
         "adws/adw_modules/", "adws/adw_sssf_config/", "adws/adw_*.py",
     ])
     data_dir: str = "adws/adw_data"
+    max_concurrency: int = 4
+    budget_tokens: int = 0
+    budget_cost: float = 0.0
+    stale_after_seconds: int = 900
 
 
 class ObservabilityConfig(BaseModel):

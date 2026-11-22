@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import time
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from . import agents, git_helper
 from .console import Console
 from .data_types import AgentCall, EnvelopeBase, EventRecord, Phase, PhaseParams
 from .utils import ensure_dir, now_iso
+from . import runtime
 
 
 class PhaseHandle:
@@ -40,7 +42,9 @@ class PhaseHandle:
 
 
 class Run:
-    def __init__(self, cfg, adw_id: str, tracer, engineer: str):
+    def __init__(self, cfg, adw_id: str, tracer, engineer: str,
+                 operator_root: Path | None = None, session_dir: Path | None = None,
+                 worktree: Path | None = None):
         self.cfg = cfg
         self.adw_id = adw_id
         self.tracer = tracer
@@ -50,12 +54,27 @@ class Run:
         self.tokens = 0
         self.cost = 0.0
         self._seq = tracer.max_phase_seq(adw_id)   # a joined run continues the sequence
-        self.repo_root = git_helper.repo_root()    # where every agent is spawned to work
-        self.session_dir = ensure_dir(Path(cfg.defaults.data_dir) / "sessions" / adw_id)
+        self.operator_root = (operator_root or git_helper.repo_root()).resolve()
+        self.repo_root = (worktree or self.operator_root).resolve()
+        self.session_dir = ensure_dir(session_dir or (self.operator_root / cfg.defaults.data_dir / "sessions" / adw_id))
+        self.patch_path: str = ""
+        self._heartbeat_stop = False
+        self.tracer.heartbeat(adw_id)
+        def beat():
+            while not self._heartbeat_stop:
+                time.sleep(15)
+                if not self._heartbeat_stop:
+                    self.tracer.heartbeat(self.adw_id)
+        threading.Thread(target=beat, daemon=True).start()
         self.context_handoff_dir = ensure_dir(self.session_dir / "context_handoff")
         self._agent_map_path = self.session_dir / "agent_map.json"
         self.agent_map: dict = (json.loads(self._agent_map_path.read_text())
                                 if self._agent_map_path.exists() else {})
+
+    def save_patch(self) -> str:
+        from .changes import save_patch
+        self.patch_path = save_patch(self)
+        return self.patch_path
 
     # ── agent map (adw_id -> per-agent coding-agent session ids) ────────────
     def save_agent_map(self, agent: str, entry: dict) -> None:
@@ -96,7 +115,11 @@ class Run:
                                           type="phase_end", name=params.name,
                                           payload={"status": "fail"}))
             self.tracer.phase_upsert(phase)
-            self.tracer.session_finish(self.adw_id, ok=False)
+            try:
+                self.save_patch()
+            finally:
+                self.tracer.session_finish(self.adw_id, ok=False)
+                runtime.release(self.tracer, self.adw_id)
             self.console.phase_ended(phase, time.monotonic() - clock)
             self.console.session_finished(False, self.tokens, self.cost,
                                           self.cfg.observability.db)
@@ -137,6 +160,8 @@ class Run:
                 phase_id=self.phases[-1].phase_id if self.phases else "",
                 type="error", name="not_accepted", payload={"reason": note}))
             self.console.note(f"not accepted: {note}")
+        self.save_patch()
         self.tracer.session_finish(self.adw_id, ok=ok)
+        runtime.release(self.tracer, self.adw_id)
         self.console.session_finished(ok, self.tokens, self.cost, self.cfg.observability.db)
         return 0 if ok else 1

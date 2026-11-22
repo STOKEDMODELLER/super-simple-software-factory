@@ -17,8 +17,36 @@ from __future__ import annotations
 
 from . import git_helper
 from .data_types import BaseRef, ChangeCapture, ChangeSet, ChangesOutput
+from pathlib import Path
+import subprocess
 
 DIFF_FILENAME = "changes.diff"
+
+
+def save_patch(run) -> str:
+    """Persist a binary patch including commits, index, worktree, and new files."""
+    baseline = getattr(run, "baseline", git_helper.rev("HEAD", cwd=run.repo_root))
+    # Worker HEAD includes all commits made in the detached worktree.  The
+    # second diff includes staged and unstaged changes after the last commit.
+    committed = subprocess.run(["git", "diff", "--binary", baseline], cwd=run.repo_root,
+                               capture_output=True, text=False, check=True).stdout
+    untracked = git_helper.untracked_files(cwd=run.repo_root) if hasattr(git_helper, "untracked_files") else []
+    chunks = [committed]
+    for name in untracked:
+        path = Path(run.repo_root) / name
+        result = subprocess.run(["git", "diff", "--no-index", "--binary", "/dev/null", name],
+                                cwd=run.repo_root,
+                                capture_output=True)
+        if result.stdout:
+            chunks.append(result.stdout)
+    target = run.context_handoff_dir / DIFF_FILENAME
+    target.write_bytes(b"\n".join(chunks))
+    return str(target)
+
+
+def apply_patch(patch_path: str | Path, repo: str | Path = ".") -> list[str]:
+    from .runtime import safe_apply
+    return safe_apply(patch_path, repo)
 
 
 def resolve_base(ref: str) -> BaseRef:

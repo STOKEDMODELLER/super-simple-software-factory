@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   status        TEXT,
   engineer      TEXT,
   started_at    TEXT, ended_at TEXT,
+  heartbeat_at  TEXT,
   total_tokens  INTEGER DEFAULT 0, total_cost REAL DEFAULT 0,
   archived      INTEGER DEFAULT 0   -- review triage, set by the UI; never by a run
 );
@@ -91,7 +92,8 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
 
 # Columns added after a schema shipped. CREATE TABLE IF NOT EXISTS never
 # revisits an existing table, so additive changes need an explicit ALTER.
-MIGRATIONS = [("agent_sessions", "color", "TEXT"),
+MIGRATIONS = [("sessions", "heartbeat_at", "TEXT"),
+              ("agent_sessions", "color", "TEXT"),
               ("gate_results", "checks_json", "TEXT"),
               ("sessions", "adw_name", "TEXT"),
               ("agent_sessions", "context_tokens", "INTEGER"),
@@ -138,9 +140,10 @@ class Tracer:
     # ── sessions ────────────────────────────────────────────────────────────
     def session_start(self, adw_id: str, engineer: str, adw_name: str | None = None) -> None:
         self.conn.execute(
-            "INSERT INTO sessions (adw_id, status, engineer, started_at) VALUES (?,?,?,?) "
-            "ON CONFLICT(adw_id) DO UPDATE SET status='running'",
-            (adw_id, "running", engineer, now_iso()),
+            "INSERT INTO sessions (adw_id, status, engineer, started_at, heartbeat_at) VALUES (?,?,?,?,?) "
+            "ON CONFLICT(adw_id) DO UPDATE SET status='running', heartbeat_at=excluded.heartbeat_at",
+
+            (adw_id, "running", engineer, now_iso(), now_iso()),
         )
         if not adw_name:
             return
@@ -157,12 +160,14 @@ class Tracer:
         self.conn.execute("UPDATE sessions SET request=? WHERE adw_id=?",
                           (request[:500], adw_id))
 
-    def session_finish(self, adw_id: str, ok: bool) -> None:
-        self.conn.execute(
-            "UPDATE sessions SET status=?, ended_at=? WHERE adw_id=?",
-            ("success" if ok else "fail", now_iso(), adw_id),
-        )
-        self.processes_end_all(adw_id)   # nothing of this run is alive any more
+    def heartbeat(self, adw_id: str) -> None:
+        self.conn.execute("UPDATE sessions SET heartbeat_at=? WHERE adw_id=?", (now_iso(), adw_id))
+
+    def session_finish(self, adw_id: str, ok: bool, status: str | None = None) -> None:
+        final = status or ("success" if ok else "fail")
+        self.conn.execute("UPDATE sessions SET status=?, ended_at=? WHERE adw_id=? AND status != 'interrupted'",
+                          (final, now_iso(), adw_id))
+        self.processes_end_all(adw_id)
 
     def session_add_usage(self, adw_id: str, tokens: int, cost: float) -> None:
         self.conn.execute(

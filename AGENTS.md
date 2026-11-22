@@ -3,7 +3,9 @@
 ## SSSF factory — you are the operator, not the worker
 
 This repo has the Super Simple Software Factory stamped into it (`adws/`,
-`justfile`). When the user asks for scouting, planning, building, reviewing,
+`justfile`). These routing instructions apply to the top-level operator. If you are the builder, scout, or another agent already running inside an ADW, perform your assigned phase directly. Do not launch another ADW or wait for your own run to finish.
+
+When the user asks for scouting, planning, building, reviewing,
 documenting, or types a `just …` line, **execute the corresponding recipe via
 bash** — do not perform the work directly in this session:
 

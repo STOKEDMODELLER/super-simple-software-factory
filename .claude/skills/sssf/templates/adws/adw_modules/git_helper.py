@@ -120,8 +120,8 @@ def ref_exists(ref: str) -> bool:
     return result.returncode == 0
 
 
-def rev(ref: str = "HEAD") -> str:
-    return _git("rev-parse", ref)
+def rev(ref: str = "HEAD", cwd: str | Path | None = None) -> str:
+    return _git("rev-parse", ref, cwd=cwd)
 
 
 def short_sha(ref: str = "HEAD") -> str:
@@ -142,8 +142,8 @@ def is_dirty() -> bool:
     return bool(_git("status", "--porcelain"))
 
 
-def untracked_files() -> list[str]:
-    out = _git("ls-files", "--others", "--exclude-standard")
+def untracked_files(cwd: str | Path | None = None) -> list[str]:
+    out = _git("ls-files", "--others", "--exclude-standard", cwd=cwd)
     return [line for line in out.splitlines() if line]
 
 
