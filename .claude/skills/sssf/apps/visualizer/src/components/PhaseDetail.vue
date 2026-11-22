@@ -57,6 +57,24 @@ const phaseOutputs = computed(() =>
     .sort((a, b) => (a.attempt ?? 0) - (b.attempt ?? 0)),
 )
 
+function outputView(env: Envelope): { summary: string; artifacts: string[] } {
+  try {
+    const value = JSON.parse(env.payload_json ?? '{}') as Record<string, unknown>
+    const summary = typeof value.summary === 'string' ? value.summary :
+      Array.isArray(value.findings) ? `${value.findings.length} finding(s)` :
+      Array.isArray(value.changed_files) ? `${value.changed_files.length} changed file(s)` :
+      typeof value.approved === 'boolean' ? (value.approved ? 'approved' : 'not approved') : 'structured output'
+    const artifacts = Array.isArray(value.artifacts) ? value.artifacts.filter((a): a is string => typeof a === 'string') : []
+    return { summary, artifacts }
+  } catch {
+    return { summary: 'unparsed output', artifacts: [] }
+  }
+}
+
+function phaseErrorLabel(error: string): string {
+  return /^\s*\d+\s*$/.test(error) ? 'Exit code' : 'Error'
+}
+
 /**
  * The vote inside an envelope, when it carries one — `approve` on a council
  * seat's CouncilVoteOutput, `approved` on a ReviewOutput. Null means this
@@ -383,7 +401,7 @@ function togglePanel(id: string) {
       <button class="close" title="close" @click="$emit('close')">✕</button>
     </header>
 
-    <div v-if="phase.error" class="error-bar d-error">{{ phase.error }}</div>
+    <div v-if="phase.error" class="error-bar d-error"><strong>{{ phaseErrorLabel(phase.error) }}</strong><span>{{ phase.error }}</span></div>
 
     <div class="d-grid">
       <div class="d-col">
@@ -631,8 +649,16 @@ function togglePanel(id: string) {
                 {{ voteOf(env) ? '✓ approve' : '✗ reject' }}
               </span>
             </div>
-            <!-- Safe: highlightJson escapes ALL input before emitting its own spans. -->
-            <pre v-html="highlightJson(env.payload_json)" />
+            <div class="output-summary">{{ outputView(env).summary }}</div>
+            <div v-if="outputView(env).artifacts.length" class="artifact-list">
+              <strong>Artifacts</strong>
+              <code v-for="path in outputView(env).artifacts" :key="path">{{ path }}</code>
+            </div>
+            <div class="output-tools">
+              <button :class="{ active: !rawView.has(`output:${env.envelope_id}`) }" @click="rawView.delete(`output:${env.envelope_id}`)">summary</button>
+              <button :class="{ active: rawView.has(`output:${env.envelope_id}`) }" @click="rawView.add(`output:${env.envelope_id}`)">raw JSON</button>
+            </div>
+            <pre v-if="rawView.has(`output:${env.envelope_id}`)" v-html="highlightJson(env.payload_json)" />
           </div>
         </DetailSection>
       </div>
@@ -840,9 +866,15 @@ function togglePanel(id: string) {
   color: var(--faint);
 }
 
-.d-error {
-  margin: 14px 18px 0;
-}
+.d-error { margin: 14px 18px 0; display: flex; gap: 10px; align-items: baseline; }
+.d-error span { font: 600 1.3rem var(--mono); overflow-wrap: anywhere; }
+.d-error strong { color: var(--red); font: 11px var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+.output-summary { margin: 8px 0; color: var(--text); line-height: 1.45; }
+.artifact-list { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0; color: var(--dim); font-size: 13px; }
+.artifact-list code { padding: 2px 6px; background: var(--panel-2); border-radius: 3px; }
+.output-tools { display: flex; gap: 4px; margin: 8px 0; }
+.output-tools button, .prompt-tools button { border: 1px solid var(--border-soft); background: var(--panel); color: var(--dim); padding: 3px 8px; font-size: 12px; cursor: pointer; }
+.output-tools button.active, .prompt-tools button.active { color: var(--text); background: var(--panel-2); }
 
 .d-grid {
   display: grid;

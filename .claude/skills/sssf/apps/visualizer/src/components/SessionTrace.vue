@@ -347,18 +347,6 @@ function blockGeom(p: Phase): { left: string; width: string } | null {
   return { left: `${geom.left}%`, width: `${geom.width}%` }
 }
 
-function blockStyle(p: Phase, lane: Lane): Record<string, string> | undefined {
-  const geom = blockGeom(p)
-  if (!geom) return undefined
-  return {
-    left: geom.left,
-    width: geom.width,
-    background: `linear-gradient(180deg, ${hexAlpha(lane.color, 0.2)}, ${hexAlpha(lane.color, 0.05)})`,
-    borderColor: p.status === 'fail' ? 'rgba(255, 111, 103, 0.8)' : hexAlpha(lane.color, 0.55),
-    '--lane-glow': hexAlpha(lane.color, 0.28),
-  }
-}
-
 function blockDurationMs(p: Phase): number {
   const start = ts(p.started_at)
   if (!Number.isFinite(start)) return NaN
@@ -435,11 +423,11 @@ function selectPhase(p: Phase) {
       <StatusChip :status="session.status ?? 'fail'" />
       <span class="dim">started {{ fmtDate(session.started_at) }}</span>
       <span class="run-stats">
-        <StatChip kind="cost" :value="session.total_cost" />
-        <StatChip kind="runtime" :value="sessionDurationMs" />
-        <StatChip kind="tokens" :value="session.total_tokens" />
-        <StatChip kind="read" :value="usage.read" />
-        <StatChip kind="written" :value="usage.written" />
+        <span class="run-metric"><b>Cost</b><StatChip kind="cost" :value="session.total_cost" /></span>
+        <span class="run-metric"><b>Duration</b><StatChip kind="runtime" :value="sessionDurationMs" /></span>
+        <span class="run-metric"><b>Tokens</b><StatChip kind="tokens" :value="session.total_tokens" /></span>
+        <span class="run-metric"><b>Read</b><StatChip kind="read" :value="usage.read" /></span>
+        <span class="run-metric"><b>Written</b><StatChip kind="written" :value="usage.written" /></span>
       </span>
     </div>
 
@@ -460,7 +448,7 @@ function selectPhase(p: Phase) {
 
       <div v-for="lane in lanes" :key="lane.id" class="row lane" :class="`kind-${lane.kind}`">
         <div class="label">
-          <span class="lane-name" :style="{ color: lane.color }">
+          <span class="lane-name" :style="{ color: `color-mix(in srgb, ${lane.color} 55%, #161819)` }">
             <component :is="KIND_ICONS[lane.kind]" class="lane-icon" :size="22" :stroke-width="2" />
             {{ lane.label }}
           </span>
@@ -498,7 +486,7 @@ function selectPhase(p: Phase) {
               v-if="blockGeom(p)"
               class="block"
               :class="[p.status, { selected: p.phase_id === phaseId }]"
-              :style="blockStyle(p, lane)"
+              :style="blockGeom(p) ?? {}"
               :title="`${p.name} — ${p.status}${p.description ? `\n${p.description}` : ''}`"
               @click="selectPhase(p)"
             >
@@ -580,11 +568,9 @@ function selectPhase(p: Phase) {
   white-space: nowrap;
 }
 
-.run-stats {
-  display: inline-flex;
-  gap: 12px;
-  flex-wrap: wrap;
-}
+.run-stats { display: inline-flex; gap: 14px; flex-wrap: wrap; }
+.run-metric { display: inline-flex; align-items: baseline; gap: 6px; }
+.run-metric b { color: var(--faint); font: 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
 
 .waterfall {
   margin: 20px 28px;
@@ -711,7 +697,7 @@ function selectPhase(p: Phase) {
 .ctx-bar {
   height: 6px;
   border-radius: 999px;
-  background: rgba(6, 8, 15, 0.75);
+  background: var(--panel-2);
   border: 1px solid var(--border-soft);
   overflow: hidden;
 }
@@ -748,7 +734,7 @@ function selectPhase(p: Phase) {
   position: absolute;
   top: 0;
   bottom: 0;
-  border-left: 1px dashed rgba(174, 191, 212, 0.14);
+  border-left: 1px dashed var(--border-soft);
 }
 
 .block {
@@ -824,9 +810,9 @@ function selectPhase(p: Phase) {
   min-width: 0;
 }
 
-.block.running {
-  animation: pulse 1.6s ease-in-out infinite;
-}
+.block.running { background: #e4efff; border-color: var(--blue); animation: pulse 1.6s ease-in-out infinite; }
+.block.success { background: #e5f5eb; border-color: var(--green); }
+.block.fail { background: #fde9e7; border-color: var(--red); }
 
 .block.queued {
   background: transparent;

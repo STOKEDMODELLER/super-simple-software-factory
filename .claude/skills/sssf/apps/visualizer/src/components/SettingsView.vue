@@ -233,6 +233,7 @@ watch(profile, async (next, prev) => {
       <h3>{{ cat.title }}</h3>
       <p class="blurb">{{ cat.blurb }}</p>
 
+      <div class="matrix-head"><span>Agent</span><span>Model</span><span>Thinking</span><span>Action</span></div>
       <div v-for="agent in cat.members" :key="agent.name" class="row">
         <div class="who">
           <span class="swatch" :style="{ background: agent.color || 'var(--faint)' }" />
@@ -251,6 +252,7 @@ watch(profile, async (next, prev) => {
         </div>
 
         <div class="controls" v-if="draft[agent.name]">
+          <span class="control-label">Model</span>
           <select v-model="draft[agent.name]!.model" class="sel model">
             <optgroup v-for="[prov, list] in byProvider" :key="prov" :label="prov">
               <option v-for="m in list" :key="m.ref" :value="m.ref">
@@ -268,6 +270,7 @@ watch(profile, async (next, prev) => {
             </option>
           </select>
 
+          <span class="control-label">Thinking</span>
           <select v-model="draft[agent.name]!.thinking" class="sel think">
             <option v-for="t in THINKING" :key="t" :value="t">{{ t }}</option>
           </select>
@@ -344,7 +347,8 @@ h2 {
 }
 
 .sel {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--panel);
+  color-scheme: light;
   color: var(--text);
   border: 1px solid var(--border-soft);
   border-radius: 7px;
@@ -404,9 +408,9 @@ h2 {
   font-size: 13px;
 }
 
-.cat {
-  margin-top: 26px;
-}
+.cat { margin-top: 26px; }
+.matrix-head { display: grid; grid-template-columns: minmax(260px, 1fr) 260px 96px 150px; gap: 8px; padding: 9px 2px 6px; color: var(--faint); font: 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.control-label { display: none; }
 
 .cat h3 {
   margin: 0 0 2px;
@@ -414,23 +418,14 @@ h2 {
   color: var(--text);
 }
 
-.row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  flex-wrap: wrap;
-  padding: 11px 2px;
-  border-bottom: 1px solid var(--border-soft);
-}
+.row { display: grid; grid-template-columns: minmax(260px, 1fr) 260px 96px 150px; align-items: center; gap: 8px; padding: 10px 2px; border-bottom: 1px solid var(--border-soft); }
 
-.who {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 260px;
-  flex: 1;
-}
+.who { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.controls { display: contents; }
+.controls .sel.model { grid-column: 2; }
+.controls .sel.think { grid-column: 3; }
+.controls .save { grid-column: 4; }
+.controls .ok, .controls .inherited { grid-column: 4; }
 
 .swatch {
   width: 9px;
@@ -462,11 +457,7 @@ h2 {
   font-size: 11.5px;
 }
 
-.controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
+.controls { display: contents; }
 
 .ok {
   color: var(--green);
@@ -489,8 +480,6 @@ h2 {
   font-size: 13px;
 }
 
-code {
-  font-size: 12px;
-  color: var(--cyan);
-}
+code { font-size: 12px; color: var(--cyan); }
+@media (max-width: 760px) { .matrix-head { display: none; } .row { display: flex; flex-wrap: wrap; gap: 8px; } .who { width: 100%; } .controls { display: flex; flex-wrap: wrap; width: 100%; } .control-label { display: inline; color: var(--faint); font: 10px var(--mono); text-transform: uppercase; } .controls .sel.model, .controls .sel.think, .controls .save, .controls .ok, .controls .inherited { grid-column: auto; } .model { min-width: min(260px, 100%); flex: 1; } }
 </style>

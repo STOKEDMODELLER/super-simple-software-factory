@@ -197,8 +197,10 @@ const hiddenRowCount = computed(() =>
     >
       ×
     </button>
-    <span class="card-id">{{ session.adw_id }}</span>
-    <span class="card-adw" :title="session.adw_name ?? ''">{{ session.adw_name ?? '—' }}</span>
+    <div class="card-run">
+      <span class="card-id">{{ session.adw_id }}</span>
+      <span class="card-adw" :title="session.adw_name ?? ''">{{ session.adw_name ?? '—' }}</span>
+    </div>
     <span class="card-req" :title="session.request ?? ''">{{ session.request }}</span>
 
     <div v-if="rows.length" class="tl">
@@ -216,7 +218,7 @@ const hiddenRowCount = computed(() =>
         </span>
       </div>
       <div v-for="row in visibleRows" :key="row.owner" class="tl-row">
-        <span class="tl-agent" :style="{ color: row.color }" :title="row.title">{{
+        <span class="tl-agent" :style="{ color: `color-mix(in srgb, ${row.color} 55%, #161819)` }" :title="row.title">{{
           row.owner
         }}</span>
         <span class="tl-track">
@@ -241,232 +243,40 @@ const hiddenRowCount = computed(() =>
       </span>
       <span class="dim">{{ fmtDate(session.started_at) }}</span>
     </div>
-    <div class="card-stats">
-      <StatChip kind="cost" :value="session.total_cost" />
-      <StatChip kind="runtime" :value="durationMs" />
-      <StatChip kind="tokens" :value="session.total_tokens" />
-    </div>
+    <div class="card-stat cost-stat"><span>Cost</span><StatChip kind="cost" :value="session.total_cost" /></div>
+    <div class="card-stat duration-stat"><span>Duration</span><StatChip kind="runtime" :value="durationMs" /></div>
+    <div class="card-stat tokens-stat"><span>Tokens</span><StatChip kind="tokens" :value="session.total_tokens" /></div>
   </a>
 </template>
 
 <style scoped>
-.card {
-  /* Uniform size: the grid fixes the width, this fixes the height — content
-     clamps and truncates rather than resizing the card. Grew by one 40px row
-     slot when the timeline went from three to four. */
-  height: 420px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 20px 22px;
-  position: relative;          /* anchors the archive button */
-  border: 1px solid var(--border-soft);
-  border-radius: 16px;
-  background: var(--surface);
-  color: var(--text);
-  cursor: pointer;
-  overflow: hidden;
-  transition:
-    border-color 0.18s ease,
-    box-shadow 0.18s ease,
-    transform 0.18s ease;
-}
-
-.card-archive {
-  /* Top-right of the card, out of the text flow so nothing reflows around it. */
-  position: absolute;
-  top: 10px;
-  right: 12px;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--dim);
-  font-family: inherit;
-  font-size: 20px;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0;
-  transition:
-    opacity 0.15s ease,
-    background 0.15s ease,
-    color 0.15s ease;
-}
-
-/* Hidden until the card is hovered — 50 cards should read as runs, not as a
-   wall of close buttons. Focus reveals it too, so keyboards are not excluded. */
-.card:hover .card-archive,
-.card-archive:focus-visible {
-  opacity: 1;
-}
-
-.card-archive:hover {
-  background: rgba(255, 111, 103, 0.16);
-  color: #ff6f67;
-}
-
-.card:hover {
-  border-color: rgba(148, 163, 255, 0.45);
-  box-shadow: 0 10px 34px rgba(148, 163, 255, 0.12);
-  transform: translateY(-2px);
-}
-
-.card.running {
-  border-color: rgba(108, 182, 255, 0.6);
-  box-shadow: 0 0 22px rgba(108, 182, 255, 0.16);
-}
-
-.card.fail {
-  border-color: rgba(255, 111, 103, 0.6);
-}
-
-/* Text rows must never absorb flex shrink — the fixed-height card squeezes
-   overflow into .tl (which clips), not into the text. */
-.card-id {
-  flex: none;
-  font-family: var(--mono);
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--purple);
-}
-
-.card-adw {
-  flex: none;
-  font-family: var(--mono);
-  font-size: 16px;
-  color: var(--cyan);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.card-req {
-  flex: none;
-  font-size: 16px;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tl {
-  display: flex;
-  flex-direction: column;
-  margin-top: 4px;
-  /* Fixed region: axis (28 + 6) + four 40px row slots, roster size or not.
-     Four slots is what lets three agents show alongside a "+N more" line. */
-  height: 194px;
-  flex: none;
-  overflow: hidden;
-}
-
-.tl-more {
-  display: flex;
-  align-items: center;
-  height: 40px;
-  padding-left: 96px;
-  font-size: 16px;
-}
-
-.tl-axis {
-  display: flex;
-  align-items: flex-end;
-  height: 28px;
-  margin-bottom: 6px;
-}
-
-.tl-gutter,
-.tl-agent {
-  flex: none;
-  /* Wide enough for full agent names (planner, builder, documenter). */
-  width: 96px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding-right: 8px;
-}
-
-.tl-scale {
-  position: relative;
-  flex: 1;
-  height: 100%;
-  border-bottom: 1px solid var(--border);
-}
-
-.tl-tick {
-  position: absolute;
-  bottom: 4px;
-  transform: translateX(-50%);
-  font-family: var(--mono);
-  font-size: 16px;
-  color: var(--faint);
-  white-space: nowrap;
-}
-
-.tl-tick.edge {
-  transform: none;
-}
-
-.tl-row {
-  display: flex;
-  align-items: center;
-  height: 40px;
-}
-
-.tl-agent {
-  font-size: 16px;
-  color: var(--dim);
-}
-
-.tl-track {
-  position: relative;
-  flex: 1;
-  height: 100%;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.tl-dot {
-  position: absolute;
-  top: 50%;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-}
-
-.tl-dot.latest {
-  width: 13px;
-  height: 13px;
-  box-shadow: 0 0 10px currentColor;
-  animation: pulse 1.4s ease-in-out infinite;
-}
-
-.tl-empty {
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
-}
-
-.card-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: auto;
-  font-size: 16px;
-}
-
-.foot-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.card-stats {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
+.card { min-height: 150px; display: grid; grid-template-columns: minmax(190px, 1fr) minmax(220px, 1.2fr) minmax(300px, 1.5fr) 110px 130px 120px; grid-template-rows: auto 1fr; gap: 8px 18px; padding: 18px 22px; position: relative; border: 0; border-top: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; overflow: hidden; transition: background .15s ease; }
+.card:hover { background: #e9eef8; }
+.card-archive { position: absolute; top: 8px; right: 4px; width: 26px; height: 26px; border: 0; background: transparent; color: var(--dim); opacity: 0; cursor: pointer; font-size: 20px; }
+.card:hover .card-archive, .card-archive:focus-visible { opacity: 1; }
+.card-archive:hover { color: var(--red); }
+.card-run { grid-column: 1; display: flex; flex-direction: column; min-width: 0; }
+.card-id { font: 700 18px var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.card-adw { color: var(--cyan); font: 700 14px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-req { grid-column: 2; grid-row: 1 / span 2; overflow: hidden; line-height: 1.4; }
+.tl { grid-column: 3; grid-row: 1 / span 2; min-height: 68px; display: flex; flex-direction: column; overflow: hidden; }
+.tl-axis { display: flex; align-items: flex-end; height: 26px; margin-bottom: 4px; }
+.tl-gutter, .tl-agent { flex: none; width: 82px; padding-right: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-scale { position: relative; flex: 1; height: 100%; border-bottom: 1px solid var(--border); }
+.tl-tick { position: absolute; bottom: 4px; transform: translateX(-50%); color: var(--faint); font: 11px var(--mono); white-space: nowrap; }
+.tl-tick.edge { transform: none; }
+.tl-row { display: flex; align-items: center; height: 30px; }
+.tl-agent { color: var(--dim); font-size: 13px; }
+.tl-track { position: relative; flex: 1; height: 100%; border-bottom: 1px solid var(--border-soft); }
+.tl-dot { position: absolute; top: 50%; width: 8px; height: 8px; border-radius: 50%; transform: translate(-50%, -50%); }
+.tl-dot.latest { width: 12px; height: 12px; animation: pulse 1.4s ease-in-out infinite; }
+.tl-more { padding-left: 82px; color: var(--dim); font-size: 12px; }
+.tl-empty { display: flex; align-items: center; justify-content: center; color: var(--faint); }
+.card-foot { grid-column: 1; grid-row: 2; align-self: end; display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.foot-status { display: inline-flex; align-items: center; gap: 8px; }
+.card-stat { grid-row: 1 / span 2; align-self: center; display: flex; flex-direction: column; gap: 3px; padding-left: 14px; border-left: 1px solid var(--border); color: var(--faint); font: 11px var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+.card-stat :deep(.stat) { padding: 0; border: 0; background: transparent; font-size: 15px; }
+.card-stat :deep(.stat-icon) { color: var(--dim); }
+.cost-stat { grid-column: 4; } .duration-stat { grid-column: 5; } .tokens-stat { grid-column: 6; }
+@media (max-width: 1220px) { .card { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 14px 8px; } .card-run { width: 100%; } .card-req, .tl { width: 100%; } .card-req { order: 2; } .tl { order: 3; } .card-foot { order: 4; } .card-stat { order: 5; flex: 1 1 28%; border-top: 1px solid var(--border); padding-top: 7px; margin: 0; } }
 </style>

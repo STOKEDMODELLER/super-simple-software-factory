@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Settings2 } from 'lucide-vue-next'
+import { Home, Layers3, Settings2, SlidersHorizontal } from 'lucide-vue-next'
 import { useRoute, hrefFor, phaseCrumb, settingsHref } from './lib/router'
 import SessionsList from './components/SessionsList.vue'
 import SessionTrace from './components/SessionTrace.vue'
@@ -10,6 +10,15 @@ const route = useRoute()
 
 <template>
   <div class="app">
+    <aside class="rail" aria-label="Primary navigation">
+      <a :href="hrefFor()" class="rail-mark" aria-label="SSSF home">SS<br />SF</a>
+      <nav class="rail-nav">
+        <a :href="hrefFor()" :class="{ active: !route.adwId && !route.settings }" aria-label="Sessions"><Home :size="22" /></a>
+        <a v-if="route.adwId" :href="hrefFor(route.adwId)" :class="{ active: !!route.adwId }" aria-label="Trace"><Layers3 :size="22" /></a>
+        <a :href="settingsHref" :class="{ active: route.settings }" aria-label="Settings"><SlidersHorizontal :size="22" /></a>
+      </nav>
+    </aside>
+    <div class="workspace">
     <header class="topbar">
       <nav class="crumbs">
         <!-- Inline copy of public/logo.svg (the favicon) so the mark renders
@@ -54,38 +63,18 @@ const route = useRoute()
       <SessionsList v-else-if="!route.adwId" />
       <SessionTrace v-else :key="route.adwId" :adw-id="route.adwId" :phase-id="route.phaseId" />
     </main>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 15px 28px;
-  background: rgba(11, 15, 24, 0.72);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-
-/* Gradient hairline instead of a hard border — the brand colors, whispered. */
-.topbar::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    rgba(200, 155, 255, 0.45),
-    rgba(90, 210, 221, 0.35) 40%,
-    rgba(90, 210, 221, 0.06)
-  );
-}
+.rail { position: fixed; inset: 0 auto 0 0; width: 78px; background: #27292a; color: #fff; display: flex; flex-direction: column; align-items: center; z-index: 20; }
+.rail-mark { color: #fff; font-weight: 700; font-size: 20px; line-height: .85; letter-spacing: -.08em; padding: 27px 0 25px; border-bottom: 1px solid #5c5e5e; width: 58px; text-align: center; }
+.rail-nav { display: flex; flex-direction: column; gap: 8px; padding-top: 25px; width: 100%; align-items: center; }
+.rail-nav a { width: 52px; height: 52px; display: grid; place-items: center; color: #f0f1ef; border-radius: 9px; transition: background .15s ease, color .15s ease; }
+.rail-nav a:hover { background: #3c3f40; } .rail-nav a.active { background: #1266df; color: #fff; }
+.workspace { margin-left: 78px; min-height: 100vh; }
+.topbar { display: flex; align-items: center; justify-content: space-between; padding: 17px 32px; background: rgba(245, 244, 239, .96); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10; }
 
 .crumbs {
   display: flex;
@@ -95,26 +84,11 @@ const route = useRoute()
   min-width: 0;
 }
 
-.logo {
-  width: 28px;
-  height: 28px;
-  flex: none;
-  filter: drop-shadow(0 0 8px rgba(200, 155, 255, 0.35));
-}
+.logo { width: 27px; height: 27px; flex: none; filter: none; }
 
-.brand {
-  background: linear-gradient(90deg, var(--purple), var(--cyan));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  white-space: nowrap;
-}
+.brand { color: var(--text); font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
 
-.sep {
-  color: var(--faint);
-}
+.sep { color: var(--faint); font-size: 23px; }
 
 .crumbs a {
   color: var(--dim);
