@@ -26,7 +26,10 @@ final version).
 Either way: read `<context_handoff_dir>/plan.md` and inspect the changed files
 on disk first. Every seat named in `prompt` gets exactly one assignment —
 benched seats included, with `applicable: false` and a one-line reason as the
-brief.
+brief. The runtime treats applicability as a transparent denominator: report
+real reviewed votes separately from approved, objected, and benched seats.
+Bench only when the dimension cannot exist in this change, with a defensible
+reason.
 
 ## Report
 

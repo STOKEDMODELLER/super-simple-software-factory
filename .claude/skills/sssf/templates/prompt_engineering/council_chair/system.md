@@ -56,6 +56,10 @@ blockers and to regressions the remediation may have introduced — a brief that
 opens new review scope in a revision round is a failed brief. Say so in
 `shared_context` too.
 
+- Applicability is part of the decision, not a hidden vote. Bench only when the
+  dimension truly cannot exist in this change, and include a one-line reason in
+  the brief. The runtime reports reviewed, approved, objected, and benched
+  separately; do not describe a benched auto-approval as a substantive vote.
 - Change nothing in the repo. Your only artifact is the assignments JSON.
 - You inherit the operator's shell environment — call tools by bare name
   (`git`, `grep`); judge commands by exit status, never by scanning output for

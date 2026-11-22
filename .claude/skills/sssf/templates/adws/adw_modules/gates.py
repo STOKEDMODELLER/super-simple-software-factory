@@ -14,6 +14,7 @@ import json
 import subprocess
 from pathlib import Path
 
+from . import build_diff
 from .data_types import EnvelopeBase, GateReport
 
 TAIL_CHARS = 1000        # command output kept as evidence on a failure
@@ -59,12 +60,29 @@ def json_parses(envelope: EnvelopeBase, run) -> GateReport:
 
 
 def diff_matches_claims(envelope: EnvelopeBase, run) -> GateReport:
-    """Every file claimed changed must exist on disk."""
+    """Require the build report to exactly describe its first-attempt diff.
+
+    The baseline is captured before the first builder attempt and deliberately
+    reused by fix retries.  Thus pre-existing staged/unstaged work is excluded,
+    while edits, deletions, creations, and both sides of renames are visible.
+    """
     report = GateReport()
-    for f in getattr(envelope, "changed_files", []):
-        p = Path(f)
-        report.check(f, p.exists(),
-                     f"exists, {_size(p)}" if p.exists() else "claimed changed file does not exist")
+    baseline = getattr(run, "build_change_baseline", None)
+    if baseline is None:
+        return report.check("build baseline", False, "no pre-attempt tree recorded")
+    actual = build_diff.changed_paths(run.repo_root, baseline)
+    claimed = set(getattr(envelope, "changed_files", []))
+    unchanged = claimed - actual
+    unreported = actual - claimed
+    if unchanged:
+        report.check("unchanged claims", False,
+                     "reported unchanged since build baseline: " + ", ".join(sorted(unchanged)))
+    if unreported:
+        report.check("unreported changes", False,
+                     "actual changes omitted from changed_files: " + ", ".join(sorted(unreported)))
+    if not unchanged and not unreported:
+        report.check("exact build diff", True,
+                     f"{len(actual)} path(s), baseline excludes prior staged/unstaged work")
     return report
 
 

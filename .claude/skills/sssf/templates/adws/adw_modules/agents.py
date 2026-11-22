@@ -15,7 +15,7 @@ from typing import Optional
 
 import yaml
 
-from . import agent_pi, permissions, prompts
+from . import agent_pi, build_diff, gates, permissions, prompts
 from .data_types import (AgentCall, AgentConfig, EnvelopeBase, EventRecord,
                          GateCheck, GateReport, Phase, PiRequest, SSSFConfig,
                          UsageBreakdown)
@@ -139,6 +139,8 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     # What the tree looked like before this agent got its hands on it. Every
     # send in this phase — first prompt, JSON retries, gate corrections — is
     # measured against this one baseline.
+    if gates.diff_matches_claims in call.gates:
+        run.build_change_baseline = build_diff.snapshot(run.repo_root)
     tree_before = permissions.snapshot(run)
 
     result = send(user_text)

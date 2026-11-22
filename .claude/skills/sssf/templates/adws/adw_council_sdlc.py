@@ -25,8 +25,8 @@ reviews exactly one dimension and votes, and a rejection without a named
 blocking item is a gate failure, not an opinion.
 
 Code disposes of the votes. The tally is arithmetic, not judgement: green-light
-at REQUIRED_APPROVALS of the six; on the FINAL round a simple majority
-(SOFT_ACCEPT_APPROVALS) soft-accepts — the build lands and the residual
+at two thirds of applicable seats; on the FINAL round at least half of the
+applicable seats can soft-accept — the build lands and the residual
 blockers become a follow-up spec instead of a discarded working tree. A red
 suite that survives the fix loop counts as an automatic rejection — seats never
 convene over code that does not run.
@@ -64,8 +64,6 @@ CHAIR_CONFIRM = "chair-anthropic"
 REQUIRED_AGENTS = (["scout", "planner", "builder", "documenter", "medic",
                     CHAIR_PROPOSE, CHAIR_CONFIRM] + SEATS)
 
-REQUIRED_APPROVALS = 4      # ceil(2/3 of six) — a true supermajority green-lights
-SOFT_ACCEPT_APPROVALS = 3   # final round only: half the council + a clean carryover
                             # ledger lands the build with reservations on record
 MAX_COUNCIL_ROUNDS = 3      # original attempt + two feedback-driven revisions
 MAX_FIX_LOOPS = 3
@@ -233,7 +231,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
                                description="Capture the incoming ask")) as ph:
         ph.log(input=prompt, baseline=git_helper.short_sha(baseline),
-               council=f"{len(SEATS)} seats, green-light at {REQUIRED_APPROVALS}, "
+               council=f"{len(SEATS)} seats, two thirds of applicable votes to green-light, "
                        f"max {MAX_COUNCIL_ROUNDS} round(s)")
 
     build: BuildOutput | None = None
@@ -330,7 +328,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
             f"request never asked for. Severity legend for seats: only `blocker` "
             f"items veto; `major`/`nit` are advisories. A seat whose dimension "
             f"this change cannot violate gets `applicable: false` and is benched "
-            f"(auto-approves) — bench honestly rather than inventing a lens.")
+            f"(abstains) — bench honestly rather than inventing a lens.")
 
         with run.phase(PhaseParams(name=f"split{tag}", kind="agent", owner=CHAIR_PROPOSE, retries=1,
                                    description="First chair divides the review into one "
@@ -370,12 +368,6 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         for seat in SEATS:
             brief = briefs[seat]
             if not brief.applicable:
-                # A benched seat has no dimension to violate — its non-objection
-                # is recorded as an approval without spending a review.
-                votes.append((seat, CouncilVoteOutput(
-                    status="success", approve=True,
-                    summary=f"benched by the chairs: {brief.focus} does not "
-                            f"apply to this change")))
                 continue
             review_path = council_dir / f"{seat}{tag}.md"
             seat_rules = (CARRYOVER_RULE + "\n\n") if round_no > 1 else ""
@@ -400,17 +392,33 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                     gates=[gates.artifacts_exist, vote_consistent]))
                 votes.append((seat, vote))
 
-        approvals = sum(1 for _, vote in votes if vote.approve)
+        benched = len(SEATS) - len(votes)
+        reviewed = len(votes)
+        approvals = sum(vote.approve for _, vote in votes)
+        objected = reviewed - approvals
+        # The denominator is real reviews, never automatic bench approvals.
+        # A round with no applicable review cannot green-light by arithmetic.
+        required = max(1, (2 * reviewed + 2) // 3)
+        soft_floor = max(1, (reviewed + 1) // 2)
         final_round = round_no >= MAX_COUNCIL_ROUNDS
-        green = approvals >= REQUIRED_APPROVALS
-        soft = final_round and not green and approvals >= SOFT_ACCEPT_APPROVALS
-        tally = (f"{approvals}/{len(SEATS)} approvals, {REQUIRED_APPROVALS} required"
-                 + (f" (soft-accept floor {SOFT_ACCEPT_APPROVALS} on the final round)"
+        green = reviewed > 0 and approvals >= required
+        soft = final_round and not green and reviewed > 0 and approvals >= soft_floor
+        residual = [f"[{seat}] {b.item}" for seat, vote in votes
+                    if not vote.approve for b in vote.blocking if b.severity == "blocker"]
+        tally = (f"reviewed {reviewed}/{len(SEATS)}, approved {approvals}, "
+                 f"objected {objected}, benched {benched}; "
+                 f"{required} approvals required of reviewed seats"
+                 + (f" (soft-accept floor {soft_floor} on final round)"
                     if final_round else ""))
         with run.phase(PhaseParams(name=f"tally{tag}", kind="code", owner="council",
                                    description="Count the votes — the green light is "
                                                "arithmetic, not judgement")) as ph:
             ph.log(tally=tally, green_lit=green, soft_accepted=soft,
+                   reviewed=reviewed, approved=approvals, objected=objected,
+                   benched=benched, denominator=f"{reviewed} applicable seats",
+                   required_approvals=required, residual_blockers=residual,
+                   landing_decision=("green" if green else "soft" if soft else "red"),
+                   **{seat: "benched" for seat in SEATS if not briefs[seat].applicable},
                    **{seat: ("approve" if vote.approve else "reject")
                       for seat, vote in votes})
 
@@ -458,6 +466,8 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         reservations_path.write_text(
             f"# Council reservations — {run.adw_id}\n\n"
             f"The council soft-accepted this build on its final round ({tally}).\n"
+            f"Decision transparency is included in the tally above; its denominator is "
+            f"applicable (reviewed) seats, with benched seats excluded.\n"
             f"These residual blockers were NOT resolved and are follow-up work:\n\n"
             + "\n".join(f"- {item}" for item in feedback.blocking) + "\n")
 
