@@ -21,12 +21,21 @@ async function tick() {
   try {
     const batch = await fetchSessionsLive(cursors)
     sessions.value = batch.sessions
+    const visible = new Set(batch.sessions.map((session) => session.adw_id))
+    const next = { ...timelines.value }
+    for (const id of Object.keys(next)) {
+      if (!visible.has(id)) {
+        delete next[id]
+        delete cursors[id]
+      }
+    }
     for (const [adwId, page] of Object.entries(batch.timelines)) {
       cursors[adwId] = Math.max(cursors[adwId] ?? 0, page.cursor)
       if (page.events.length) {
-        timelines.value = { ...timelines.value, [adwId]: [...(timelines.value[adwId] ?? []), ...page.events] }
+        next[adwId] = [...(next[adwId] ?? []), ...page.events].slice(-2000)
       }
     }
+    timelines.value = next
     nowMs.value = Date.now()
     apiError.value = null
     loaded.value = true

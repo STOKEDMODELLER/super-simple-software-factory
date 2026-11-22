@@ -143,7 +143,10 @@ const server = Bun.serve({
       let cursors: Record<string, number> = {};
       try {
         const raw = new URL(req.url).searchParams.get("cursors");
-        if (raw) cursors = JSON.parse(raw) as Record<string, number>;
+        const parsed: unknown = raw ? JSON.parse(raw) : null;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          cursors = parsed as Record<string, number>;
+        }
       } catch {
         // Invalid cursors are equivalent to a first refresh.
       }

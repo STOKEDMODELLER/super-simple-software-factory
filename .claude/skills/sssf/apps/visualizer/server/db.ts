@@ -223,9 +223,23 @@ export class SssfDb {
   sessionsLive(cursors: Record<string, number> = {}): SessionsLiveResponse {
     const sessions = this.sessions();
     const timelines: Record<string, EventsPage> = {};
-    for (const session of sessions) {
-      const after = Number.isFinite(cursors[session.adw_id]) ? Math.max(0, cursors[session.adw_id]!) : 0;
-      timelines[session.adw_id] = this.events(session.adw_id, after, 1000);
+    const visible: Record<string, number> = Object.create(null);
+    for (const { adw_id } of sessions) {
+      const cursor = cursors[adw_id] ?? 0;
+      visible[adw_id] = Number.isSafeInteger(cursor) && cursor >= 0 ? cursor : 0;
+    }
+    // Card tooltips use the display name. Full tool output stays on the trace endpoint.
+    const rows = this.db.query<Event, [string]>(
+      `SELECT e.rowid, e.event_id, e.adw_id, e.phase_id, e.type, e.name, e.started_at,
+              NULL AS parent_id, NULL AS payload_json, NULL AS tokens, NULL AS ended_at
+         FROM json_each(?) AS visible JOIN events e
+           ON e.adw_id = visible.key AND e.rowid > visible.value
+        ORDER BY e.rowid LIMIT 1500`,
+    ).all(JSON.stringify(visible));
+    for (const row of rows) {
+      const page = timelines[row.adw_id] ??= { events: [], cursor: 0, has_more: false };
+      page.events.push(row);
+      page.cursor = row.rowid;
     }
     return { sessions, timelines };
   }
