@@ -57,6 +57,23 @@ export async function archiveSession(adwId: string, archived = true): Promise<vo
   if (!res.ok) throw new Error(`POST ${url} → ${res.status}`)
 }
 
+export interface ChatRepo { id: string; name: string; path: string }
+export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; workflow?: 'scout' | 'build'; status?: string; created_at: string }
+export interface ChatConversation { id: string; repo: ChatRepo; messages: ChatMessage[]; created_at: string }
+
+export function fetchChats(repo: string): Promise<ChatConversation[]> {
+  return getJson('/api/chat/conversations?repo=' + encodeURIComponent(repo)) as Promise<ChatConversation[]>
+}
+
+export function fetchChatRepos(): Promise<ChatRepo[]> { return getJson('/api/chat/repos') as Promise<ChatRepo[]> }
+export async function createChat(repo_id: string, message: string, workflow: 'scout' | 'build'): Promise<ChatConversation> {
+  const data = await send('/api/chat/conversations', 'POST', { repo_id, message, workflow })
+  return data as ChatConversation
+}
+export async function continueChat(id: string, message: string, workflow: 'scout' | 'build'): Promise<ChatConversation> {
+  return await send(`/api/chat/conversations/${encodeURIComponent(id)}`, 'POST', { message, workflow }) as ChatConversation
+}
+
 export function fetchHealth(): Promise<HealthResponse> {
   return getJson('/api/health') as Promise<HealthResponse>
 }

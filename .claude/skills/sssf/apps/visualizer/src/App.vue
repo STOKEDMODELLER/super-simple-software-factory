@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { Home, Layers3, Settings2, SlidersHorizontal } from 'lucide-vue-next'
-import { useRoute, hrefFor, phaseCrumb, settingsHref } from './lib/router'
+import { Home, Layers3, MessageCircle, Settings2, SlidersHorizontal } from 'lucide-vue-next'
+import { useRoute, hrefFor, phaseCrumb, settingsHref, chatHref } from './lib/router'
 import SessionsList from './components/SessionsList.vue'
 import SessionTrace from './components/SessionTrace.vue'
 import SettingsView from './components/SettingsView.vue'
+import ChatView from './components/ChatView.vue'
 
 const route = useRoute()
 </script>
@@ -13,8 +14,9 @@ const route = useRoute()
     <aside class="rail" aria-label="Primary navigation">
       <a :href="hrefFor()" class="rail-mark" aria-label="SSSF home">SS<br />SF</a>
       <nav class="rail-nav">
-        <a :href="hrefFor()" :class="{ active: !route.adwId && !route.settings }" aria-label="Sessions"><Home :size="22" /></a>
+        <a :href="hrefFor()" :class="{ active: !route.adwId && !route.settings && !route.chat }" aria-label="Sessions"><Home :size="22" /></a>
         <a v-if="route.adwId" :href="hrefFor(route.adwId)" :class="{ active: !!route.adwId }" aria-label="Trace"><Layers3 :size="22" /></a>
+        <a :href="chatHref" :class="{ active: route.chat }" aria-label="Chat"><MessageCircle :size="22" /></a>
         <a :href="settingsHref" :class="{ active: route.settings }" aria-label="Settings"><SlidersHorizontal :size="22" /></a>
       </nav>
     </aside>
@@ -30,7 +32,11 @@ const route = useRoute()
         </svg>
         <span class="brand">Super Simple Software Factory</span>
         <span class="sep">›</span>
-        <a :href="hrefFor()" :class="{ current: !route.adwId && !route.settings }">sessions</a>
+        <a :href="hrefFor()" :class="{ current: !route.adwId && !route.settings && !route.chat }">sessions</a>
+        <template v-if="route.chat">
+          <span class="sep">›</span>
+          <span class="current">chat</span>
+        </template>
         <template v-if="route.settings">
           <span class="sep">›</span>
           <span class="current">settings</span>
@@ -59,7 +65,8 @@ const route = useRoute()
       </div>
     </header>
     <main>
-      <SettingsView v-if="route.settings" />
+      <ChatView v-if="route.chat" />
+      <SettingsView v-else-if="route.settings" />
       <SessionsList v-else-if="!route.adwId" />
       <SessionTrace v-else :key="route.adwId" :adw-id="route.adwId" :phase-id="route.phaseId" />
     </main>

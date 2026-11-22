@@ -17,6 +17,10 @@ import {
   availableModels, createProfile, listProfiles, patchAgent, readProfile,
 } from "./config.ts";
 import type { AgentPrompts, ApiError, HealthResponse } from "../shared/types.ts";
+import {
+  allowedRepos, message as chatMessage, newId, repoFor, runWorkflow, validateMessage,
+  validConversationId, validWorkflow, type ChatConversation, type Workflow,
+} from "./chat.ts";
 
 const PORT = Number(process.env.PORT ?? 4600);
 const DIST_DIR = resolve(import.meta.dir, "..", "dist");
@@ -35,6 +39,23 @@ try {
  * The roster lives there too, which is what the settings routes read and write.
  */
 const REPO_ROOT = resolve(dirname(dbPath), "..", "..");
+const CHAT_REPOS = allowedRepos(REPO_ROOT);
+const conversations = new Map<string, ChatConversation>();
+
+/** Chat is a local control surface, not a public API. Do not allow browser
+ * pages on another origin (or a non-loopback bind) to start a workflow. */
+function chatRequestAllowed(req: Request): boolean {
+  const url = new URL(req.url);
+  const host = url.hostname;
+  if (req.headers.get("sec-fetch-site") === "cross-site") return false;
+  if (host !== "localhost" && host !== "127.0.0.1" && host !== "::1") return false;
+  const origin = req.headers.get("origin");
+  return !origin || origin === url.origin;
+}
+
+function chatGuard(req: Request): Response | null {
+  return chatRequestAllowed(req) ? null : json({ error: "chat endpoints require same-origin loopback access" } satisfies ApiError, 403);
+}
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -120,11 +141,66 @@ async function serveStatic(req: Request): Promise<Response> {
 }
 
 const server = Bun.serve({
+  hostname: "127.0.0.1",
   port: PORT,
   // The default 10s cuts off /api/models, which shells out to pi. Raised for
   // that one slow, human-triggered call — every other route answers in ms.
   idleTimeout: 30,
   routes: {
+    "/api/chat/repos": safely((req) => {
+      const denied = chatGuard(req); if (denied) return denied;
+      return json(CHAT_REPOS.map(({ id, name, path }) => ({ id, name, path })));
+    }),
+
+    "/api/chat/conversations": {
+      GET: safely((req) => {
+        const denied = chatGuard(req); if (denied) return denied;
+        const repoId = new URL(req.url).searchParams.get("repo");
+        return json([...conversations.values()].filter((conversation) => !repoId || conversation.repo.id === repoId));
+      }),
+      POST: safely(async (req) => {
+        const denied = chatGuard(req); if (denied) return denied;
+        const body = (await req.json().catch(() => ({}))) as { repo_id?: unknown; message?: unknown; workflow?: unknown };
+        const repo = repoFor(CHAT_REPOS, body.repo_id);
+        if (!repo) return json({ error: "repo_id is not an allowed local repository" } satisfies ApiError, 400);
+        let text: string;
+        try { text = validateMessage(body.message); } catch (error) { return json({ error: (error as Error).message } satisfies ApiError, 400); }
+        const workflow: Workflow = validWorkflow(body.workflow) ? body.workflow : "scout";
+        const conversation: ChatConversation = { id: newId(), repo, messages: [chatMessage("user", text, { workflow })], created_at: new Date().toISOString() };
+        conversations.set(conversation.id, conversation);
+        server.timeout(req, 0);
+        const result = await runWorkflow(conversation, workflow);
+        conversation.messages.push(chatMessage("assistant", result.output || (result.code === 0 ? "Workflow completed." : "Workflow failed."), { workflow, status: result.code === 0 ? "completed" : "failed" }));
+        return json(conversation, 201);
+      }),
+    },
+
+    "/api/chat/conversations/:conversation_id": {
+      GET: safely((req) => {
+        const denied = chatGuard(req); if (denied) return denied;
+        const id = param(req, "conversation_id");
+        if (!validConversationId(id)) return json({ error: "invalid conversation id" } satisfies ApiError, 400);
+        const conversation = conversations.get(id);
+        return conversation ? json(conversation) : notFound(`no conversation ${id}`);
+      }),
+      POST: safely(async (req) => {
+        const denied = chatGuard(req); if (denied) return denied;
+        const id = param(req, "conversation_id");
+        const conversation = conversations.get(id);
+        if (!conversation) return notFound(`no conversation ${id}`);
+        const body = (await req.json().catch(() => ({}))) as { message?: unknown; workflow?: unknown };
+        let text: string;
+        try { text = validateMessage(body.message); } catch (error) { return json({ error: (error as Error).message } satisfies ApiError, 400); }
+        const workflow: Workflow = validWorkflow(body.workflow) ? body.workflow : "scout";
+        if (conversation.messages.at(-1)?.role === "user") return json({ error: "A workflow is already running" }, 409);
+        conversation.messages.push(chatMessage("user", text, { workflow }));
+        server.timeout(req, 0);
+        const result = await runWorkflow(conversation, workflow);
+        conversation.messages.push(chatMessage("assistant", result.output || (result.code === 0 ? "Workflow completed." : "Workflow failed."), { workflow, status: result.code === 0 ? "completed" : "failed" }));
+        return json(conversation, 200);
+      }),
+    },
+
     "/api/health": safely(
       () =>
         json({

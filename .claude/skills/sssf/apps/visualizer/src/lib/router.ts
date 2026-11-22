@@ -6,6 +6,7 @@ export interface Route {
   adwId: string | null
   phaseId: string | null
   settings: boolean
+  chat: boolean
 }
 
 /** Reserved first segment. adw_ids are 8 hex chars, so this can never collide. */
@@ -17,8 +18,9 @@ function parse(): Route {
     .split('/')
     .filter(Boolean)
     .map(decodeURIComponent)
-  if (parts[0] === SETTINGS) return { adwId: null, phaseId: null, settings: true }
-  return { adwId: parts[0] ?? null, phaseId: parts[1] ?? null, settings: false }
+  if (parts[0] === SETTINGS) return { adwId: null, phaseId: null, settings: true, chat: false }
+  if (parts[0] === 'chat') return { adwId: null, phaseId: null, settings: false, chat: true }
+  return { adwId: parts[0] ?? null, phaseId: parts[1] ?? null, settings: false, chat: false }
 }
 
 const route = ref<Route>(parse())
@@ -43,6 +45,7 @@ export function hrefFor(adwId?: string | null, phaseId?: string | null): string 
 }
 
 export const settingsHref = `#/${SETTINGS}`
+export const chatHref = '#/chat'
 
 export function navigate(adwId?: string | null, phaseId?: string | null): void {
   window.location.hash = hrefFor(adwId, phaseId)

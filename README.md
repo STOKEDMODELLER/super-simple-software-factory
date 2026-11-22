@@ -490,3 +490,11 @@ The delivery record, Git objects and recovery patches live under
 `adws/adw_data/deliveries/<id>/`. Retain these while recovery or audit is needed.
 To run the isolated end-to-end test, make `python:3.12-alpine` available locally
 and run `SSSF_DOCKER_E2E=1 python3 -m unittest discover -s tests -p test_request_to_merge.py -v`.
+
+### Dashboard chat
+
+Open **Chat** in the dashboard sidebar, select a local repository, and choose
+**Scout** to ask a question or **Build** to request an isolated patch. Follow-up
+messages include the recent conversation. To offer multiple factory checkouts,
+set `SSSF_REPOS` to their comma-separated absolute paths before starting the
+dashboard. [Dashboard chat setup](.claude/skills/sssf/apps/visualizer/CHAT.md)
