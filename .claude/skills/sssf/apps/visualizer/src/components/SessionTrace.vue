@@ -422,13 +422,14 @@ const councilTally = computed(() => {
     try {
       const value = JSON.parse(event.payload_json) as Record<string, unknown>
       const keys = ['reviewed', 'approved', 'objected', 'benched', 'residual_blockers']
-      if (!keys.some((key) => key in value)) continue
+      if (!value || typeof value !== 'object' || !('tally' in value) || !keys.every((key) => key in value)) continue
       const display = (item: unknown): string => {
         if (Array.isArray(item)) return item.length ? item.map(String).join(', ') : 'none'
         if (item === null || item === undefined || item === '') return '—'
         return String(item)
       }
       return {
+        decision: value.soft_accepted ? 'Accepted with reservations' : value.green_lit ? 'Approved' : 'Rejected',
         reviewed: display(value.reviewed),
         approved: display(value.approved),
         objected: display(value.objected),
@@ -462,7 +463,7 @@ const councilTally = computed(() => {
     </div>
 
     <section v-if="councilTally" class="council-tally" aria-label="Council tally">
-      <div class="council-heading"><b>Landing decision</b><span class="dim">council tally</span></div>
+      <div class="council-heading"><b>Landing decision</b><span>{{ councilTally.decision }}</span></div>
       <div class="council-values">
         <span><b>Reviewed</b>{{ councilTally.reviewed }}</span>
         <span><b>Approved</b>{{ councilTally.approved }}</span>
