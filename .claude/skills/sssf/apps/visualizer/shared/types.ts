@@ -7,7 +7,7 @@
  */
 
 /** sessions.status — a run is running until it earns success. */
-export type SessionStatus = "running" | "success" | "fail";
+export type SessionStatus = "running" | "success" | "fail" | "interrupted";
 
 /** phases.status — queued only for manifest-declared phases not yet entered. */
 export type PhaseStatus = "queued" | "running" | "success" | "fail";
@@ -227,6 +227,12 @@ export interface ToolCallPayload {
 
 /** GET /api/sessions */
 export type SessionsResponse = SessionSummary[];
+
+/** One batch refresh for the sessions ledger. */
+export interface SessionsLiveResponse {
+  sessions: SessionSummary[];
+  timelines: Record<string, EventsPage>;
+}
 
 /** GET /api/sessions/:adw_id */
 /**

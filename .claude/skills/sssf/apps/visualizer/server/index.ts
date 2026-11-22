@@ -137,6 +137,19 @@ const server = Bun.serve({
 
     "/api/sessions": safely((req) => json(db.sessions(intQuery(req, "limit", 200)))),
 
+    // The ledger refresh is deliberately one HTTP request. Cursors are sent as
+    // a small JSON map so each run receives only events inserted since its last tick.
+    "/api/sessions/live": safely((req) => {
+      let cursors: Record<string, number> = {};
+      try {
+        const raw = new URL(req.url).searchParams.get("cursors");
+        if (raw) cursors = JSON.parse(raw) as Record<string, number>;
+      } catch {
+        // Invalid cursors are equivalent to a first refresh.
+      }
+      return json(db.sessionsLive(cursors));
+    }),
+
     // ── roster settings ──────────────────────────────────────────────────
     // The only writes besides archive, and they are deliberately narrow: one
     // agent's model or thinking level, patched line-by-line so the config's

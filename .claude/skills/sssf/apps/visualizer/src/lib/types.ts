@@ -3,6 +3,7 @@
 export type {
   Session,
   SessionSummary,
+  SessionsLiveResponse,
   SessionUsage,
   SessionDetail,
   Phase,

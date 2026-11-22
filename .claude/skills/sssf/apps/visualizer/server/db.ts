@@ -26,6 +26,7 @@ import type {
   SessionDetail,
   SessionSummary,
   SessionUsage,
+  SessionsLiveResponse,
 } from "../shared/types.ts";
 
 const DEFAULT_DB_RELATIVE = "adws/adw_data/sssf.db";
@@ -216,6 +217,17 @@ export class SssfDb {
       );
     }
     return summaries;
+  }
+
+  /** One read-side batch for the live ledger; cursors make timeline data incremental. */
+  sessionsLive(cursors: Record<string, number> = {}): SessionsLiveResponse {
+    const sessions = this.sessions();
+    const timelines: Record<string, EventsPage> = {};
+    for (const session of sessions) {
+      const after = Number.isFinite(cursors[session.adw_id]) ? Math.max(0, cursors[session.adw_id]!) : 0;
+      timelines[session.adw_id] = this.events(session.adw_id, after, 1000);
+    }
+    return { sessions, timelines };
   }
 
   session(adwId: string): Session | null {

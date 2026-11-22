@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, shallowRef, watch } from 'vue'
+import { computed } from 'vue'
 import type { EventRow, SessionSummary } from '../lib/types'
-import { archiveSession, fetchEvents } from '../lib/api'
+import { archiveSession } from '../lib/api'
 import { axisTicks, fmtDate, fmtOffset, ts } from '../lib/format'
 import { agentColor, dotColor, eventLabel } from '../lib/events'
 import { hrefFor } from '../lib/router'
@@ -9,7 +9,7 @@ import StatusChip from './StatusChip.vue'
 import StatChip from './StatChip.vue'
 import PhaseDots from './PhaseDots.vue'
 
-const props = defineProps<{ session: SessionSummary; nowMs: number }>()
+const props = defineProps<{ session: SessionSummary; nowMs: number; events: EventRow[] }>()
 const emit = defineEmits<{ archived: [adwId: string] }>()
 
 // The card is an <a>; the button lives inside it, so the click must not
@@ -26,68 +26,20 @@ async function archive(event: MouseEvent) {
   }
 }
 
-// Each card tails its own event stream: one full fetch on mount, then the
-// same rowid-cursor poll as the trace view — but only while the run is live.
-const events = shallowRef<EventRow[]>([])
-let cursor = 0
-let inflight = false
-let timer: ReturnType<typeof setInterval> | undefined
-
-function stopPolling() {
-  clearInterval(timer)
-  timer = undefined
-}
-
-async function pull() {
-  if (inflight) return
-  inflight = true
-  try {
-    const fresh: EventRow[] = []
-    let page
-    do {
-      // Cursor pagination is inherently sequential: each request needs the previous cursor.
-      // oxlint-disable-next-line no-await-in-loop
-      page = await fetchEvents(props.session.adw_id, cursor, 1000)
-      cursor = Math.max(cursor, page.cursor)
-      fresh.push(...page.events)
-    } while (page.has_more)
-    if (fresh.length) events.value = [...events.value, ...fresh]
-    if (props.session.status !== 'running') stopPolling()
-  } catch {
-    /* the list view surfaces api errors; a card just retries next poll */
-  } finally {
-    inflight = false
-  }
-}
-
-onMounted(() => {
-  void pull()
-  if (props.session.status === 'running') timer = setInterval(() => void pull(), 500)
-})
-
-onUnmounted(stopPolling)
-
-watch(
-  () => props.session.status,
-  (status) => {
-    if (status === 'running' && !timer) timer = setInterval(() => void pull(), 500)
-    // On the transition out of running, one last pull drains the tail and stops the timer.
-    else if (status !== 'running') void pull()
-  },
-)
-
+// Timeline data is supplied by the parent batch refresh. Keeping the stream
+// here would create one request per mounted card.
 const running = computed(() => props.session.status === 'running')
 
 const range = computed(() => {
   const s = props.session
   let t0 = ts(s.started_at)
   if (!Number.isFinite(t0)) {
-    t0 = Math.min(...events.value.map((e) => ts(e.started_at)).filter(Number.isFinite))
+    t0 = Math.min(...props.events.map((e) => ts(e.started_at)).filter(Number.isFinite))
   }
   if (!Number.isFinite(t0)) t0 = props.nowMs
   let t1 = running.value ? props.nowMs : ts(s.ended_at)
   if (!Number.isFinite(t1)) {
-    t1 = Math.max(...events.value.map((e) => ts(e.started_at)).filter(Number.isFinite))
+    t1 = Math.max(...props.events.map((e) => ts(e.started_at)).filter(Number.isFinite))
   }
   if (!Number.isFinite(t1)) t1 = t0 + 1000
   return { t0, span: Math.max(t1 - t0, 1000) }
@@ -126,7 +78,7 @@ const rows = computed<TimelineRow[]>(() => {
   let latest: TimelineDot | null = null
   let latestT = -Infinity
 
-  for (const e of events.value) {
+  for (const e of props.events) {
     const owner = e.phase_id ? ownerByPhase.get(e.phase_id) : undefined
     const color = dotColor(e.type)
     if (!owner || !color) continue

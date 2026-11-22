@@ -412,6 +412,36 @@ const sessionDurationMs = computed(() => {
 function selectPhase(p: Phase) {
   navigate(props.adwId, p.phase_id === props.phaseId ? null : p.phase_id)
 }
+
+// Council tally rows are ordinary events so older databases remain readable.
+// Prefer the explicit tally fields, but keep the raw payload visible when a
+// legacy writer used a different shape or value type.
+const councilTally = computed(() => {
+  for (const event of events.value.toReversed()) {
+    if (!event.payload_json) continue
+    try {
+      const value = JSON.parse(event.payload_json) as Record<string, unknown>
+      const keys = ['reviewed', 'approved', 'objected', 'benched', 'residual_blockers']
+      if (!keys.some((key) => key in value)) continue
+      const display = (item: unknown): string => {
+        if (Array.isArray(item)) return item.length ? item.map(String).join(', ') : 'none'
+        if (item === null || item === undefined || item === '') return '—'
+        return String(item)
+      }
+      return {
+        reviewed: display(value.reviewed),
+        approved: display(value.approved),
+        objected: display(value.objected),
+        benched: display(value.benched),
+        residual_blockers: display(value.residual_blockers),
+        raw: event.payload_json,
+      }
+    } catch {
+      // Raw event rows remain available in the phase detail.
+    }
+  }
+  return null
+})
 </script>
 
 <template>
@@ -430,6 +460,18 @@ function selectPhase(p: Phase) {
         <span class="run-metric"><b>Written</b><StatChip kind="written" :value="usage.written" /></span>
       </span>
     </div>
+
+    <section v-if="councilTally" class="council-tally" aria-label="Council tally">
+      <div class="council-heading"><b>Landing decision</b><span class="dim">council tally</span></div>
+      <div class="council-values">
+        <span><b>Reviewed</b>{{ councilTally.reviewed }}</span>
+        <span><b>Approved</b>{{ councilTally.approved }}</span>
+        <span><b>Objected</b>{{ councilTally.objected }}</span>
+        <span><b>Benched</b>{{ councilTally.benched }}</span>
+        <span class="blockers"><b>Residual blockers</b>{{ councilTally.residual_blockers }}</span>
+      </div>
+      <details class="council-raw"><summary>raw tally event</summary><code>{{ councilTally.raw }}</code></details>
+    </section>
 
     <div v-if="phases.length" class="waterfall">
       <div class="row axis-row">
@@ -549,6 +591,21 @@ function selectPhase(p: Phase) {
 .trace {
   padding: 0 0 40px;
 }
+
+.council-tally {
+  margin: 14px 24px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.council-heading, .council-values { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.council-heading { margin-bottom: 9px; font: 12px var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+.council-values span { display: inline-flex; gap: 6px; color: var(--dim); font: 13px var(--mono); }
+.council-values b { color: var(--faint); }
+.council-values .blockers { flex: 1 1 260px; }
+.council-raw { margin-top: 8px; color: var(--faint); font: 11px var(--mono); }
+.council-raw code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 6px; color: var(--dim); }
 
 .run-strip {
   display: flex;

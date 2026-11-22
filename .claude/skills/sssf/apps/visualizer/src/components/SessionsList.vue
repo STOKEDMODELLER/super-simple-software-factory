@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, shallowRef } from 'vue'
-import type { SessionSummary } from '../lib/types'
-import { fetchSessions } from '../lib/api'
+import type { EventRow, SessionSummary } from '../lib/types'
+import { fetchSessionsLive } from '../lib/api'
 import { ts } from '../lib/format'
 import SessionCard from './SessionCard.vue'
 
@@ -12,12 +12,21 @@ const nowMs = ref(Date.now())
 
 let timer: ReturnType<typeof setInterval> | undefined
 let inflight = false
+const cursors: Record<string, number> = {}
+const timelines = shallowRef<Record<string, EventRow[]>>({})
 
 async function tick() {
   if (inflight) return
   inflight = true
   try {
-    sessions.value = await fetchSessions()
+    const batch = await fetchSessionsLive(cursors)
+    sessions.value = batch.sessions
+    for (const [adwId, page] of Object.entries(batch.timelines)) {
+      cursors[adwId] = Math.max(cursors[adwId] ?? 0, page.cursor)
+      if (page.events.length) {
+        timelines.value = { ...timelines.value, [adwId]: [...(timelines.value[adwId] ?? []), ...page.events] }
+      }
+    }
     nowMs.value = Date.now()
     apiError.value = null
     loaded.value = true
@@ -65,6 +74,7 @@ const ordered = computed(() =>
         :key="s.adw_id"
         :session="s"
         :now-ms="nowMs"
+        :events="timelines[s.adw_id] ?? []"
         @archived="onArchived"
       />
       </div>

@@ -7,6 +7,7 @@ import type {
   PromptsResponse,
   SessionDetail,
   SessionSummary,
+  SessionsLiveResponse,
 } from './types'
 
 async function getJson(url: string): Promise<unknown> {
@@ -17,6 +18,11 @@ async function getJson(url: string): Promise<unknown> {
 
 export function fetchSessions(): Promise<SessionSummary[]> {
   return getJson('/api/sessions') as Promise<SessionSummary[]>
+}
+
+export function fetchSessionsLive(cursors: Record<string, number>): Promise<SessionsLiveResponse> {
+  const query = encodeURIComponent(JSON.stringify(cursors))
+  return getJson(`/api/sessions/live?cursors=${query}`) as Promise<SessionsLiveResponse>
 }
 
 export async function fetchSession(adwId: string): Promise<SessionDetail> {
