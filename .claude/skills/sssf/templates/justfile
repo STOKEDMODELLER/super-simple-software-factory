@@ -128,3 +128,7 @@ review-run ID:
 # Apply a reviewed worker.patch without staging operator files.
 apply-run ID:
     uv run adws/adw_workspace.py --config {{config}} apply "$1"
+
+# Drive a resumable request through review, integration and merge
+delivery *ARGS:
+    python3 adws/delivery.py "$@"

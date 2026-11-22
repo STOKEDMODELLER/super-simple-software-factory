@@ -439,3 +439,54 @@ Follow the [IndyDevDan YouTube channel](https://www.youtube.com/@indydevdan) to 
 Stay Focused and Keep Building
 
 - IndyDevDan
+
+### Drive a request through merge
+
+Run from the fork checkout with Docker running, a locally available worker image,
+and Git and gh authenticated for the fork. Save a JSON manifest like the following.
+The three commands must exist in your image or in the base checkout. Each runs
+in /workspace, offline, without host credentials. The worker edits files there.
+It receives the request through `SSSF_REQUEST`, acceptance criteria through
+`SSSF_CRITERIA`, and review feedback through `SSSF_FEEDBACK`.
+
+```json
+{
+  "repo": "OWNER/REPO",
+  "base": "main",
+  "request": "Implement the requested change",
+  "criteria": "Describe the observable acceptance conditions",
+  "image": "my-project-worker:local",
+  "worker": ["./scripts/work"],
+  "check": ["./scripts/test"],
+  "smoke": ["./scripts/smoke"],
+  "merge": "human",
+  "attempt_seconds": 600,
+  "deadline_seconds": 3600
+}
+```
+
+```sh
+id=$(just delivery start request.json)
+just delivery watch "$id"
+# From a second terminal
+just delivery status "$id"
+just delivery cancel "$id"
+```
+
+Restart the same watch after an interruption. Its journal records the active
+generation, input commit and phase. A killed or timed-out worker gets one retry
+from its captured changes. Ordinary command failures stop the delivery.
+A stopped watch resumes enforcement of deadlines when restarted. A run can
+make one review revision and refresh an integrated base once. During review,
+the worker and checkout are released. Approval on the current head and passing
+GitHub checks admit the integration test. In human mode, wait for `await_merge`
+before merging. Queue mode requests the protected queue when available and
+otherwise waits for a human. Configure branch protection and required merge
+queue CI on GitHub. The controller observes the merged commit on the base,
+reruns integration checks if its tree differs, and runs smoke on that commit.
+A failed post-merge check records a stopped delivery with the merge SHA.
+
+The delivery record, Git objects and recovery patches live under
+`adws/adw_data/deliveries/<id>/`. Retain these while recovery or audit is needed.
+To run the isolated end-to-end test, make `python:3.12-alpine` available locally
+and run `SSSF_DOCKER_E2E=1 python3 -m unittest discover -s tests -p test_request_to_merge.py -v`.

@@ -22,6 +22,7 @@ TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 
 GITIGNORE_ENTRIES = [
     "adws/adw_data/sessions/",
+    "adws/adw_data/deliveries/",
     "adws/adw_data/sssf.db*",
     ".env",
     # The ADWs are Python, so importing adw_modules writes bytecode next to it.
