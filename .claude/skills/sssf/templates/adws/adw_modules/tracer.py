@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   total_tokens  INTEGER DEFAULT 0, total_cost REAL DEFAULT 0,
   archived      INTEGER DEFAULT 0   -- review triage, set by the UI; never by a run
 );
+CREATE TABLE IF NOT EXISTS run_leases (
+  adw_id TEXT PRIMARY KEY, operator TEXT NOT NULL, directory TEXT NOT NULL, base TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS phases (
   phase_id      TEXT PRIMARY KEY,
   adw_id        TEXT REFERENCES sessions,
@@ -92,7 +95,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
 
 # Columns added after a schema shipped. CREATE TABLE IF NOT EXISTS never
 # revisits an existing table, so additive changes need an explicit ALTER.
-MIGRATIONS = [("sessions", "heartbeat_at", "TEXT"),
+MIGRATIONS = [("processes", "birth", "TEXT"), ("sessions", "heartbeat_at", "TEXT"),
               ("agent_sessions", "color", "TEXT"),
               ("gate_results", "checks_json", "TEXT"),
               ("sessions", "adw_name", "TEXT"),
@@ -141,7 +144,7 @@ class Tracer:
     def session_start(self, adw_id: str, engineer: str, adw_name: str | None = None) -> None:
         self.conn.execute(
             "INSERT INTO sessions (adw_id, status, engineer, started_at, heartbeat_at) VALUES (?,?,?,?,?) "
-            "ON CONFLICT(adw_id) DO UPDATE SET status='running', heartbeat_at=excluded.heartbeat_at",
+            "ON CONFLICT(adw_id) DO UPDATE SET status='running', ended_at=NULL, heartbeat_at=excluded.heartbeat_at",
 
             (adw_id, "running", engineer, now_iso(), now_iso()),
         )
@@ -185,10 +188,11 @@ class Tracer:
         belongs to. Writing it here makes the trace the answer to "what is this
         run running, and how do I stop it".
         """
+        from .runtime import process_birth
         self.conn.execute(
-            "INSERT INTO processes (adw_id, kind, name, pid, command, started_at)"
-            " VALUES (?,?,?,?,?,?)",
-            (adw_id, kind, name, pid, command[:500], now_iso()),
+            "INSERT INTO processes (adw_id, kind, name, pid, command, started_at, birth)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (adw_id, kind, name, pid, command[:500], now_iso(), process_birth(pid)),
         )
 
     def process_end(self, adw_id: str, pid: int) -> None:

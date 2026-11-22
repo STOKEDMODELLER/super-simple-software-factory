@@ -14,7 +14,7 @@ from typing import Any, Callable, Literal, Optional, Type
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 PhaseKind = Literal["engineer", "agent", "code"]
-PhaseStatus = Literal["queued", "running", "success", "fail"]
+PhaseStatus = Literal["queued", "running", "success", "fail", "interrupted"]
 
 
 # ── Phases ────────────────────────────────────────────────────────────────────
@@ -423,10 +423,10 @@ class ConfigDefaults(BaseModel):
         "adws/adw_modules/", "adws/adw_sssf_config/", "adws/adw_*.py",
     ])
     data_dir: str = "adws/adw_data"
-    max_concurrency: int = 4
-    budget_tokens: int = 0
-    budget_cost: float = 0.0
-    stale_after_seconds: int = 900
+    max_concurrency: int = Field(default=4, ge=1)
+    budget_tokens: int = Field(default=0, ge=0)
+    budget_cost: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    stale_after_seconds: int = Field(default=900, ge=1)
 
 
 class ObservabilityConfig(BaseModel):

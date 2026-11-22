@@ -1,75 +1,85 @@
-"""Session lifecycle: pin-or-create an adw_id, build the Run object.
-
-`ensure(cfg, adw_id)` joins the session if it exists or creates it under
-exactly that id (pinned ids for repeatable runs); omitted, a fresh id is
-minted and printed so the next ADW can pick it up.
-"""
-
-from __future__ import annotations
-
+"""Admit a workflow, bind it to its own checkout, and preserve its patch on exit."""
+import atexit
 import os
+import re
 import signal
+import sqlite3
 import sys
+import threading
 from pathlib import Path
 
-from .data_types import SSSFConfig, EventRecord
+from . import git_helper, runtime
 from .runner import Run
 from .tracer import Tracer
-from .utils import engineer_name, new_id, ensure_dir
-from . import git_helper, runtime
+from .utils import engineer_name, new_id, now_iso
 
 
-def _finalize_when_killed(run: Run) -> None:
-    """A killed run still closes its own trace.
-
-    Python's default SIGTERM handling exits without unwinding, so `just kill`
-    (or any `kill <pid>`) would leave the session reading `running` forever and
-    its process rows open — the trace would claim work is in flight that is
-    already dead. Turning the signal into SystemExit both finalizes here and
-    lets the phase context manager record the phase as failed on the way out.
-    """
-    def handler(signum, _frame):
-        run.save_patch()
-        run.tracer.event(EventRecord(
-            adw_id=run.adw_id, type="interrupted", name="signal",
-            payload={"signal": signum, "patch": run.patch_path or ""}))
-        run.tracer.session_finish(run.adw_id, ok=False, status="interrupted")
-        runtime.release(run.tracer, run.adw_id)
-        raise SystemExit(128 + signum)
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, handler)
-
-
-def ensure(cfg: SSSFConfig, adw_id: str | None = None) -> Run:
-    operator_root = git_helper.repo_root()
-    adw_id = adw_id or new_id(8)
-    data_dir = (operator_root / cfg.defaults.data_dir).resolve()
-    db_path = (operator_root / cfg.observability.db).resolve()
-    session_dir = ensure_dir(data_dir / "sessions" / adw_id)
-    tracer = Tracer(db_path, session_dir / "events.jsonl")
-    parent = os.environ.get("SSSF_PARENT_ID", os.environ.get("ADW_PARENT_ID", ""))
+def ensure(cfg, adw_id=None):
+    runtime.nested_guard()
+    operator = git_helper.repo_root()
+    rid = adw_id or new_id(8)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,95}", rid):
+        raise ValueError("invalid run ID")
+    directory = (operator / cfg.defaults.data_dir / "sessions" / rid).resolve()
+    db = (operator / cfg.observability.db).resolve()
+    tracer = Tracer(db, directory / "events.jsonl")
+    runtime.reconcile(tracer, cfg.defaults.stale_after_seconds)
+    lock = runtime.lease(directory)
+    base_file = directory / "base.commit"
+    base = base_file.read_text().strip() if base_file.exists() else git_helper.rev("HEAD")
     try:
-        runtime.admit(tracer, adw_id, cfg.defaults.max_concurrency,
-                      cfg.defaults.budget_tokens, cfg.defaults.budget_cost, parent)
-    except runtime.AdmissionError as error:
-        tracer.session_start(adw_id, engineer_name(), adw_name=Path(sys.argv[0]).stem)
-        tracer.event(EventRecord(
-            adw_id=adw_id, type="admission_rejected", name="admission", payload={"reason": str(error), "parent_id": parent}))
-        tracer.session_finish(adw_id, ok=False)
+        runtime.admit(tracer, rid, cfg.defaults.max_concurrency, operator, directory, base)
+    except BaseException:
+        lock.close()
         raise
-    baseline = git_helper.rev("HEAD", cwd=operator_root)
-    worktree = runtime.create_worktree(operator_root, session_dir)
-    os.chdir(worktree)
-    run = Run(cfg=cfg, adw_id=adw_id, tracer=tracer, engineer=engineer_name(),
-              operator_root=operator_root, session_dir=session_dir, worktree=worktree)
-    run.baseline = baseline
-    os.environ["SSSF_PARENT_ID"] = adw_id
-    tracer.session_start(adw_id, run.engineer, adw_name=Path(sys.argv[0]).stem)
-    # This process is the run. Record it before any phase opens, so a run that
-    # hangs in its first agent call is still killable by adw_id.
-    tracer.process_start(adw_id, "adw", "", os.getpid(),
-                         " ".join([Path(sys.argv[0]).name, *sys.argv[1:]]))
-    _finalize_when_killed(run)
-    run.console.session_started(adw_id, run.engineer)
+    work = directory / "worktree"
+    stop = threading.Event()
+    interrupted = False
+    finished = False
+
+    def finalize(status="fail"):
+        nonlocal finished
+        if finished:
+            return
+        finished = True
+        stop.set()
+        os.chdir(operator)
+        try:
+            runtime.retire(tracer, rid, operator, directory, base, "interrupted" if interrupted else status)
+        finally:
+            lock.close()
+
+    def on_signal(number, frame):
+        nonlocal interrupted
+        interrupted = True
+        raise SystemExit(128 + number)
+
+    atexit.register(finalize)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, on_signal)
+    try:
+        tracer.session_start(rid, engineer_name(), Path(sys.argv[0]).stem)
+        tracer.process_start(rid, "adw", "", os.getpid(), " ".join([Path(sys.argv[0]).name, *sys.argv[1:]]))
+        base_file.write_text(base + "\n")
+        runtime.git(operator, "worktree", "add", "--quiet", "--detach", str(work), base)
+        patch = directory / "worker.patch"
+        if patch.exists() and patch.stat().st_size:
+            runtime.git(work, "apply", "--binary", str(patch))
+        os.chdir(work)
+        run = Run(cfg, rid, tracer, engineer_name(), directory, work)
+        run.finalize = finalize
+        os.environ.update(SSSF_PARENT_ID=rid, SSSF_PARENT_DB=str(db),
+                          SSSF_PARENT_LOG=str(directory / "events.jsonl"))
+    except BaseException:
+        finalize()
+        raise
+
+    def heartbeat():
+        with sqlite3.connect(db, timeout=5, isolation_level=None) as conn:
+            while not stop.wait(min(15, max(1, cfg.defaults.stale_after_seconds / 3))):
+                conn.execute("UPDATE sessions SET heartbeat_at=? WHERE adw_id=? AND status='running'",
+                             (now_iso(), rid))
+
+    threading.Thread(target=heartbeat, daemon=True).start()
+    run.console.session_started(rid, run.engineer)
     return run

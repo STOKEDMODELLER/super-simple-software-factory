@@ -114,4 +114,13 @@ procs ADW_ID:
 
 # boot the trace UI, http://localhost:4601 (api on :4600)
 obs:
+    uv run adws/adw_workspace.py --config {{config}} reconcile
     cd .claude/skills/sssf/apps/visualizer && bun install && (SSSF_DB={{justfile_directory()}}/{{db}} bun run server/index.ts &) && bunx vite
+
+# Reconcile orphaned runs and preserve their partial patches.
+reconcile:
+    uv run adws/adw_workspace.py --config {{config}} reconcile
+
+# Apply a reviewed worker.patch without staging operator files.
+apply-run ID:
+    uv run adws/adw_workspace.py --config {{config}} apply "$1"

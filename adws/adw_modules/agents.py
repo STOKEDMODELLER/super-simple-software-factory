@@ -15,7 +15,7 @@ from typing import Optional
 
 import yaml
 
-from . import agent_pi, build_diff, gates, permissions, prompts
+from . import agent_pi, build_diff, gates, permissions, prompts, runtime
 from .data_types import (AgentCall, AgentConfig, EnvelopeBase, EventRecord,
                          GateCheck, GateReport, Phase, PiRequest, SSSFConfig,
                          UsageBreakdown)
@@ -31,6 +31,7 @@ class GateFailure(RuntimeError):
 # ── config ───────────────────────────────────────────────────────────────────
 
 def load_config(path: str = "adws/adw_sssf_config/sssf.config.yaml") -> SSSFConfig:
+    runtime.nested_guard()
     raw = yaml.safe_load(Path(path).read_text()) or {}
     defaults = raw.get("defaults", {}) or {}
     for agent in raw.get("agents", []) or []:
@@ -111,6 +112,7 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
 
     def send(prompt_text: str) -> agent_pi.PiResult:
         nonlocal latest
+        run.check_budget()
         request = PiRequest(
             prompt=prompt_text,
             system_prompt=system_text,
@@ -130,8 +132,8 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
             on_spawn=lambda pid: run.tracer.process_start(
                 run.adw_id, "agent", agent.name, pid,
                 f"{agent.coding_agent} {agent.name} {agent.model}"),
-            on_exit=lambda pid: run.tracer.process_end(run.adw_id, pid))
-        run.add_usage(result.tokens, result.cost)
+            on_exit=lambda pid: run.tracer.process_end(run.adw_id, pid),
+            on_usage=run.add_usage)
         spent.merge(result.usage)
         latest = result
         return result

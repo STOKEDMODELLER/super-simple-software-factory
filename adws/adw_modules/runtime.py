@@ -1,121 +1,167 @@
-"""Run admission, worktree isolation, heartbeats, and safe patch application."""
-from __future__ import annotations
-
+"""Local run leases and recovery. Only the holder of a lease may retire its worktree."""
+import fcntl
 import os
 import signal
 import subprocess
-import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
-from .utils import ensure_dir, now_iso
+from . import build_diff
+from .utils import now_iso
 
 
 class AdmissionError(RuntimeError):
     pass
 
 
-def _git(*args, cwd=None):
-    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip() or f"git {' '.join(args)} failed")
-    return result.stdout.strip()
+def lease(directory):
+    directory.mkdir(parents=True, exist_ok=True)
+    handle = (directory / "run.lock").open("a")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        raise AdmissionError(f"run {directory.name} is already active") from None
+    return handle
 
 
-def admit(db, adw_id: str, max_concurrency: int, budget_tokens: int = 0,
-          budget_cost: float = 0.0, parent_id: str = "") -> None:
-    """Atomically reserve a run slot in the operator database."""
+def admit(db, run_id, maximum, operator, directory, base):
     conn = db.conn
-    conn.execute("CREATE TABLE IF NOT EXISTS runtime_admission (adw_id TEXT PRIMARY KEY, "
-                 "parent_id TEXT, reserved_at TEXT, tokens INTEGER DEFAULT 0, cost REAL DEFAULT 0)")
     conn.execute("BEGIN IMMEDIATE")
     try:
-        if parent_id:
-            raise AdmissionError(f"nested workflow rejected: parent={parent_id}")
-        active = conn.execute("SELECT COUNT(*) FROM runtime_admission WHERE adw_id != ?", (adw_id,)).fetchone()[0]
-        if max_concurrency > 0 and active >= max_concurrency:
-            raise AdmissionError(f"max concurrency reached ({max_concurrency})")
-        totals = conn.execute("SELECT COALESCE(SUM(tokens),0), COALESCE(SUM(cost),0) FROM runtime_admission").fetchone()
-        if budget_tokens and totals[0] >= budget_tokens or budget_cost and totals[1] >= budget_cost:
-            raise AdmissionError("runtime budget exhausted")
-        conn.execute("INSERT OR IGNORE INTO runtime_admission(adw_id,parent_id,reserved_at) VALUES (?,?,?)",
-                     (adw_id, parent_id, now_iso()))
+        count, = conn.execute("SELECT COUNT(*) FROM run_leases").fetchone()
+        if count >= maximum:
+            raise AdmissionError(f"maximum concurrent runs reached ({maximum})")
+        conn.execute("INSERT INTO run_leases VALUES (?,?,?,?)",
+                     (run_id, str(operator), str(directory), base))
         conn.execute("COMMIT")
-    except Exception:
+    except BaseException:
         conn.execute("ROLLBACK")
         raise
 
 
-def release(db, adw_id: str) -> None:
-    db.conn.execute("DELETE FROM runtime_admission WHERE adw_id=?", (adw_id,))
+def git(root, *args):
+    return subprocess.check_output(["git", *args], cwd=root)
 
 
-def create_worktree(operator_root: Path, session_dir: Path) -> Path:
-    worktree = session_dir / "worktree"
-    if worktree.exists():
-        return worktree.resolve()
-    ensure_dir(session_dir)
-    _git("worktree", "add", "--detach", str(worktree), "HEAD", cwd=operator_root)
-    return worktree.resolve()
+def record_patch(operator, directory, base):
+    work = directory / "worktree"
+    if not work.exists():
+        return
+    # Refuse to traverse a replacement directory or symlink during cleanup.
+    if work.is_symlink() or Path(os.fsdecode(git(work, "rev-parse", "--show-toplevel")).strip()).resolve() != work.resolve():
+        raise RuntimeError(f"unexpected worktree at {work}")
+    target = directory / "worker.patch"
+    tree = build_diff.snapshot(work)
+    patch = git(work, "diff", "--binary", "--full-index", "--no-renames", "--no-ext-diff", base, tree)
+    tmp = target.with_suffix(".pending")
+    tmp.write_bytes(patch)
+    tmp.replace(target)
+    # The full delta is durable before disposing of any worker files.
+    git(operator, "worktree", "remove", "--force", str(work))
 
 
-def _patch_names(patch: str) -> set[str]:
-    names = set()
-    for line in patch.splitlines():
-        if line.startswith("+++ b/"):
-            names.add(line[6:].split("\t", 1)[0])
-        elif line.startswith("--- a/") and line[6:].split("\t", 1)[0] != "/dev/null":
-            names.add(line[6:].split("\t", 1)[0])
+def safe_apply(patch_path, repo="."):
+    repo = Path(repo).resolve()
+    patch = Path(patch_path).resolve()
+    if not patch.stat().st_size:
+        return []
+    rows = git(repo, "apply", "--numstat", "-z", str(patch)).split(b"\0")
+    names = [os.fsdecode(row.split(b"\t", 2)[2]) for row in rows if row]
+    if not names or any(not name for name in names):
+        raise ValueError("expected a generated no-renames worker patch")
+    dirty = git(repo, "--literal-pathspecs", "status", "--porcelain=v1", "-z",
+                "--untracked-files=all", "--", *names)
+    if dirty:
+        raise RuntimeError("refusing to apply over staged, unstaged or untracked operator changes")
+    git(repo, "apply", "--check", "--binary", str(patch))
+    git(repo, "apply", "--binary", str(patch))
     return names
 
 
-def safe_apply(patch_path: str | Path, repo: str | Path = ".") -> list[str]:
-    """Apply a saved patch only when none of its paths are dirty."""
-    repo = Path(repo).resolve()
-    patch = Path(patch_path).read_text()
-    names = _patch_names(patch)
-    dirty = set()
-    result = subprocess.run(["git", "status", "--porcelain", "--", *names], cwd=repo,
-                            capture_output=True, text=True)
-    for line in result.stdout.splitlines():
-        if line:
-            dirty.add(line[3:].strip().split(" -> ")[-1])
-    if dirty:
-        raise RuntimeError("refusing patch: touched paths are dirty: " + ", ".join(sorted(dirty)))
-    checked = subprocess.run(["git", "apply", "--check", "--binary", str(Path(patch_path).resolve())],
-                             cwd=repo, capture_output=True, text=True)
-    if checked.returncode:
-        raise RuntimeError(checked.stderr.strip() or "patch does not apply cleanly")
-    subprocess.run(["git", "apply", "--binary", str(Path(patch_path).resolve())], cwd=repo, check=True)
-    return sorted(names)
+def nested_guard():
+    parent = os.environ.get("SSSF_PARENT_ID")
+    if not parent:
+        return
+    from .tracer import Tracer
+    from .data_types import EventRecord
+    db = os.environ.get("SSSF_PARENT_DB")
+    log = os.environ.get("SSSF_PARENT_LOG")
+    if db and log:
+        tracer = Tracer(db, log)
+        try:
+            tracer.event(EventRecord(adw_id=parent, type="admission_rejected", name="nested workflow",
+                                     parent_id=parent, payload={"parent_id": parent}))
+        finally:
+            tracer.conn.close()
+    raise AdmissionError(f"nested workflow rejected (parent {parent})")
 
 
-def kill_process_tree(pid: int, command: str = "", run_id: str = "") -> bool:
-    """Kill only a recorded process whose live command still identifies this run."""
+def process_birth(pid):
+    row = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="],
+                         capture_output=True, text=True)
+    return row.stdout.strip()
+
+
+def terminate_group(pid):
     try:
-        actual = subprocess.check_output(["ps", "-p", str(pid), "-o", "command="], text=True).strip()
-    except (OSError, subprocess.CalledProcessError):
-        return False
-    if run_id and run_id not in actual and (command and command not in actual):
-        return False
-    try:
-        os.kill(pid, signal.SIGTERM)
-        return True
+        if os.getpgid(pid) != pid:
+            return
+        os.killpg(pid, signal.SIGTERM)
+        for _ in range(20):
+            time.sleep(.05)
+            os.killpg(pid, 0)
+        os.killpg(pid, signal.SIGKILL)
     except ProcessLookupError:
-        return False
+        pass
 
 
-def recover_stale(tracer, stale_seconds: int = 900) -> list[str]:
-    """Mark stale runs interrupted and terminate their identity-checked children."""
-    rows = tracer.conn.execute("SELECT adw_id, COALESCE(heartbeat_at, started_at) FROM sessions WHERE status='running'").fetchall()
-    recovered = []
-    for adw_id, started in rows:
-        # ISO timestamps are comparable after converting through epoch.
-        age = time.time() - __import__('datetime').datetime.fromisoformat(started).timestamp()
-        if age < stale_seconds:
+def retire(tracer, rid, operator, directory, base, status):
+    record_patch(operator, directory, base)
+    stamp = now_iso()
+    conn = tracer.conn
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("UPDATE phases SET status=?,ended_at=? WHERE adw_id=? AND status='running'",
+                     (status, stamp, rid))
+        tracer.session_finish(rid, ok=status == "success", status=status)
+        conn.execute("DELETE FROM run_leases WHERE adw_id=?", (rid,))
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def reconcile(tracer, stale_seconds):
+    conn = tracer.conn
+    for rid, operator, directory, base in conn.execute("SELECT * FROM run_leases").fetchall():
+        directory = Path(directory)
+        try:
+            lock = lease(directory)
+        except AdmissionError:
             continue
-        for pid, command in tracer.conn.execute("SELECT pid,command FROM processes WHERE adw_id=? AND ended_at IS NULL", (adw_id,)):
-            kill_process_tree(pid, command, adw_id)
-        tracer.session_finish(adw_id, ok=False, status="interrupted")
-        recovered.append(adw_id)
-    return recovered
+        with lock:
+            # The preceding owner may have finished between SELECT and flock.
+            if not conn.execute("SELECT 1 FROM run_leases WHERE adw_id=?", (rid,)).fetchone():
+                continue
+            for pid, birth in conn.execute("SELECT pid,birth FROM processes WHERE adw_id=? AND "
+                                           "kind='agent' AND ended_at IS NULL", (rid,)):
+                if birth and process_birth(pid) == birth:
+                    terminate_group(pid)
+            retire(tracer, rid, Path(operator), directory, base, "interrupted")
+    # Legacy runs have no lease. Never signal a historical PID. Require age AND
+    # absence of the original workflow process before repairing its display.
+    rows = conn.execute("SELECT adw_id,COALESCE(heartbeat_at,started_at) FROM sessions WHERE "
+                        "status='running' AND adw_id NOT IN (SELECT adw_id FROM run_leases)").fetchall()
+    for rid, stamp in rows:
+        if not stamp or time.time() - datetime.fromisoformat(stamp).timestamp() < stale_seconds:
+            continue
+        processes = conn.execute("SELECT pid,command FROM processes WHERE kind='adw' AND "
+                                 "ended_at IS NULL AND adw_id=?", (rid,)).fetchall()
+        if any(command and command.split()[0] in subprocess.run(
+                ["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True).stdout
+               for pid, command in processes):
+            continue
+        conn.execute("UPDATE phases SET status='interrupted', ended_at=? WHERE adw_id=? AND status='running'", (now_iso(), rid))
+        tracer.session_finish(rid, ok=False, status="interrupted")
